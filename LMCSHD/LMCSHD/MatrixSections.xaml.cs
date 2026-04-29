@@ -56,6 +56,7 @@ namespace LMCSHD
             SectionsGrid.CommitEdit(DataGridEditingUnit.Row, true);
 
             MatrixFrame.Sections = SectionList.Select(vm => vm.ToSection()).ToList();
+            MatrixFrame.SaveSections();
             Close();
         }
 

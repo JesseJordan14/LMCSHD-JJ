@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
+using System.IO;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using static LMCSHD.PixelOrder;
@@ -53,13 +54,69 @@ namespace LMCSHD
             // Sections may now extend past the new matrix size; safer to drop them.
             if (dimensionsChanged) Sections.Clear();
 
-            // Scaffolding: if no sections are defined yet on a 32x32 matrix, pre-populate
-            // the author's two-panel layout so first-run users don't see a broken wall.
-            // Once persistence lands this can go.
+            // Restore sections saved for these dimensions, if any.
+            if (Sections.Count == 0) LoadSections();
+
+            // First-run scaffolding: only if nothing was loaded.
             if (UseTestSectionsOn32x32 && w == 32 && h == 32 && Sections.Count == 0)
                 UseTestSections_TwoPanels32x32();
 
             OnDimensionsChanged();
+        }
+
+        // Persistence: sections are saved per matrix size to %LOCALAPPDATA%\LMCSHD-JJ\sections-WxH.dat.
+        // Format: one section per line, "X Y W H Orientation StartCorner NewLine" — space separated.
+        public static void SaveSections()
+        {
+            try
+            {
+                string path = SectionsFilePath(Width, Height);
+                Directory.CreateDirectory(Path.GetDirectoryName(path));
+                using (var writer = new StreamWriter(path, false))
+                {
+                    foreach (var s in Sections)
+                        writer.WriteLine(s.X + " " + s.Y + " " + s.Width + " " + s.Height + " " +
+                                         s.Orientation + " " + s.StartCorner + " " + s.NewLine);
+                }
+            }
+            catch { /* best-effort: silent failure preserves in-memory state */ }
+        }
+
+        public static void LoadSections()
+        {
+            string path = SectionsFilePath(Width, Height);
+            if (!File.Exists(path)) return;
+            try
+            {
+                var loaded = new List<Section>();
+                foreach (var line in File.ReadAllLines(path))
+                {
+                    var p = line.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                    if (p.Length != 7) continue;
+                    int x, y, w, h;
+                    Orientation orient;
+                    StartCorner sc;
+                    NewLine nl;
+                    if (!int.TryParse(p[0], out x)) continue;
+                    if (!int.TryParse(p[1], out y)) continue;
+                    if (!int.TryParse(p[2], out w)) continue;
+                    if (!int.TryParse(p[3], out h)) continue;
+                    if (!Enum.TryParse(p[4], out orient)) continue;
+                    if (!Enum.TryParse(p[5], out sc)) continue;
+                    if (!Enum.TryParse(p[6], out nl)) continue;
+                    loaded.Add(new Section(x, y, w, h, orient, sc, nl));
+                }
+                Sections = loaded;
+            }
+            catch { /* ignore corrupt file; fall back to scaffolding */ }
+        }
+
+        private static string SectionsFilePath(int w, int h)
+        {
+            string dir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "LMCSHD-JJ");
+            return Path.Combine(dir, "sections-" + w + "x" + h + ".dat");
         }
 
         // Configures Sections for the author's 2x (16x32) wall.
