@@ -46,6 +46,27 @@ namespace LMCSHD
         public enum NewLine { SC, SN }
     }
 
+    public struct Section
+    {
+        public int X, Y, Width, Height;
+        public PixelOrder.Orientation Orientation;
+        public PixelOrder.StartCorner StartCorner;
+        public PixelOrder.NewLine NewLine;
+
+        public Section(int x, int y, int width, int height,
+                       PixelOrder.Orientation orientation = PixelOrder.Orientation.HZ,
+                       PixelOrder.StartCorner startCorner = PixelOrder.StartCorner.TL,
+                       PixelOrder.NewLine newLine = PixelOrder.NewLine.SC)
+        {
+            X = x; Y = y; Width = width; Height = height;
+            Orientation = orientation;
+            StartCorner = startCorner;
+            NewLine = newLine;
+        }
+
+        public int PixelCount { get { return Width * Height; } }
+    }
+
     public struct MatrixTitle
     {
         public int MatrixTitleDimensionX;

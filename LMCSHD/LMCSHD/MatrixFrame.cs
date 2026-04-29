@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
@@ -20,6 +21,15 @@ namespace LMCSHD
         public static Orientation orientation { get; set; } = Orientation.HZ;
         public static StartCorner startCorner { get; set; } = StartCorner.TL;
         public static NewLine newLine { get; set; } = NewLine.SC;
+
+        // When Sections is non-empty, GetOrderedSerialFrame walks each section
+        // in its own local serpentine order instead of treating the matrix as one panel.
+        // Empty list = backward-compatible single-panel behavior.
+        public static List<Section> Sections { get; set; } = new List<Section>();
+
+        // Temp scaffolding for multi-panel milestone 1.1: auto-configure 2 sections
+        // when matrix is 32x32. Remove once a real Sections UI exists.
+        public static bool UseTestSectionsOn32x32 = true;
         #endregion
 
 
@@ -38,7 +48,25 @@ namespace LMCSHD
             Height = h;
             Frame = null;
             Frame = new Pixel[Width * Height];
+
+            if (UseTestSectionsOn32x32 && w == 32 && h == 32)
+                UseTestSections_TwoPanels32x32();
+            else
+                Sections.Clear();
+
             OnDimensionsChanged();
+        }
+
+        // Configures Sections for the author's 2x (16x32) wall.
+        // Each section uses BR/HZ/SN, matching the wiring proven out by the
+        // single-panel test in the LED_Display firmware repo.
+        public static void UseTestSections_TwoPanels32x32()
+        {
+            Sections = new List<Section>
+            {
+                new Section(0,  0, 16, 32, Orientation.HZ, StartCorner.BR, NewLine.SN),
+                new Section(16, 0, 16, 32, Orientation.HZ, StartCorner.BR, NewLine.SN),
+            };
         }
 
         public static void Refresh()
@@ -48,70 +76,60 @@ namespace LMCSHD
 
         public static byte[] GetOrderedSerialFrame()
         {
-            byte[] orderedFrame = new byte[Width * Height * 3];
+            if (Sections == null || Sections.Count == 0)
+            {
+                byte[] buf = new byte[Width * Height * 3];
+                EmitRegion(buf, 0, new Section(0, 0, Width, Height, orientation, startCorner, newLine));
+                return buf;
+            }
 
-            int index = 0;
+            int totalPixels = 0;
+            foreach (var s in Sections) totalPixels += s.PixelCount;
+            byte[] outBuf = new byte[totalPixels * 3];
+            int offset = 0;
+            foreach (var s in Sections)
+                offset = EmitRegion(outBuf, offset, s);
+            return outBuf;
+        }
 
-            int startX = startCorner == StartCorner.TR || startCorner == StartCorner.BR ? MatrixFrame.Width - 1 : 0;
-            int termX = startCorner == StartCorner.TR || startCorner == StartCorner.BR ? -1 : MatrixFrame.Width;
-            int incX = startCorner == StartCorner.TR || startCorner == StartCorner.BR ? -1 : 1;
+        private static int EmitRegion(byte[] buf, int offset, Section s)
+        {
+            int startX = (s.StartCorner == StartCorner.TR || s.StartCorner == StartCorner.BR) ? s.Width - 1 : 0;
+            int termX  = (s.StartCorner == StartCorner.TR || s.StartCorner == StartCorner.BR) ? -1 : s.Width;
+            int incX   = (s.StartCorner == StartCorner.TR || s.StartCorner == StartCorner.BR) ? -1 : 1;
+            int startY = (s.StartCorner == StartCorner.BL || s.StartCorner == StartCorner.BR) ? s.Height - 1 : 0;
+            int termY  = (s.StartCorner == StartCorner.BL || s.StartCorner == StartCorner.BR) ? -1 : s.Height;
+            int incY   = (s.StartCorner == StartCorner.BL || s.StartCorner == StartCorner.BR) ? -1 : 1;
 
-            int startY = startCorner == StartCorner.BL || startCorner == StartCorner.BR ? MatrixFrame.Height - 1 : 0;
-            int termY = startCorner == StartCorner.BL || startCorner == StartCorner.BR ? -1 : MatrixFrame.Height;
-            int incY = startCorner == StartCorner.BL || startCorner == StartCorner.BR ? -1 : 1;
-
-
-            if (orientation == Orientation.HZ)
+            if (s.Orientation == Orientation.HZ)
             {
                 for (int y = startY; y != termY; y += incY)
                 {
                     for (int x = startX; x != termX; x += incX)
                     {
-                        int i = newLine == NewLine.SC || y % 2 == 0 ? x : MatrixFrame.Width - 1 - x;
-                        i += (y * MatrixFrame.Width);
-                        orderedFrame[index * 3] = MatrixFrame.Frame[i].R;
-                        orderedFrame[index * 3 + 1] = MatrixFrame.Frame[i].G;
-                        orderedFrame[index * 3 + 2] = MatrixFrame.Frame[i].B;
-                        index++;
+                        int localX = (s.NewLine == NewLine.SC || y % 2 == 0) ? x : s.Width - 1 - x;
+                        int globalIndex = (s.Y + y) * Width + (s.X + localX);
+                        buf[offset++] = Frame[globalIndex].R;
+                        buf[offset++] = Frame[globalIndex].G;
+                        buf[offset++] = Frame[globalIndex].B;
                     }
                 }
             }
-            // This code doesn't work so I'm commenting it out
-            /*
-            else
-            {
-                for (int y = startY; y != termY; y += incY)
-                {
-                    for (int x = startX; x != termX; x += incX)
-                    {
-                        int i = newLine == NewLine.SC || x % 2 == 0 ? y : MatrixFrame.Height - 1 - y;
-                        i += (x * MatrixFrame.Height);
-                        orderedFrame[index * 3] = MatrixFrame.Frame[i].R;
-                        orderedFrame[index * 3 + 1] = MatrixFrame.Frame[i].G;
-                        orderedFrame[index * 3 + 2] = MatrixFrame.Frame[i].B;
-                        index++;
-                    }
-                }
-            }
-            */
-            // Here's the working version
-            else
+            else // VT
             {
                 for (int x = startX; x != termX; x += incX)
                 {
                     for (int y = startY; y != termY; y += incY)
                     {
-                        int i = newLine == NewLine.SC || x % 2 == 0 ? y : MatrixFrame.Height - 1 - y;
-                        i = i * MatrixFrame.Width;
-                        i += x;
-                        orderedFrame[index * 3] = MatrixFrame.Frame[i].R;
-                        orderedFrame[index * 3 + 1] = MatrixFrame.Frame[i].G;
-                        orderedFrame[index * 3 + 2] = MatrixFrame.Frame[i].B;
-                        index++;
+                        int localY = (s.NewLine == NewLine.SC || x % 2 == 0) ? y : s.Height - 1 - y;
+                        int globalIndex = (s.Y + localY) * Width + (s.X + x);
+                        buf[offset++] = Frame[globalIndex].R;
+                        buf[offset++] = Frame[globalIndex].G;
+                        buf[offset++] = Frame[globalIndex].B;
                     }
                 }
             }
-            return orderedFrame;
+            return offset;
         }
 
         public static void SetPixel(int x, int y, Pixel color)
