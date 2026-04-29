@@ -9,7 +9,7 @@ Personal fork of [`TechRandom/LMCSHD-TR`](https://github.com/TechRandom/LMCSHD-T
   - [x] Design a `Section` data model (X, Y, W, H, origin, orientation, snake)
   - [x] Wire section-aware pixel ordering into the `0x42` frame transmit path
   - [x] Update source firmware to drop the per-pixel demux loop
-  - [ ] End-to-end test on the 32×32 wall *(pending build + flash)*
+  - [x] End-to-end test on the 32×32 wall
   - [ ] Add a Sections configuration UI (load/save per session)
 - [ ] **Feature 2: Per-section orientation** *(largely falls out of Feature 1)*
 - [ ] **Feature 3: Direct WebSocket from PC**
