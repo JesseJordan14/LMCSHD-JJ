@@ -4,14 +4,14 @@ Personal fork of [`TechRandom/LMCSHD-TR`](https://github.com/TechRandom/LMCSHD-T
 
 ## Progress
 
-- [ ] **Feature 1: Native multi-panel section support**
+- [x] **Feature 1: Native multi-panel section support**
   - [x] Map the current screen-capture → serial-send pipeline in the C# code
   - [x] Design a `Section` data model (X, Y, W, H, origin, orientation, snake)
   - [x] Wire section-aware pixel ordering into the `0x42` frame transmit path
   - [x] Update source firmware to drop the per-pixel demux loop
   - [x] End-to-end test on the 32×32 wall
   - [x] Add a Sections configuration UI (Edit → Sections... menu)
-  - [ ] Persist sections across launches (Settings or JSON)
+  - [x] Persist sections across launches (per-dimension file in %LOCALAPPDATA%)
 - [ ] **Feature 2: Per-section orientation** *(largely falls out of Feature 1)*
 - [ ] **Feature 3: Direct WebSocket from PC**
 - [ ] **Feature 4: Brightness / gamma / dithering controls**
