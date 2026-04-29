@@ -20,6 +20,13 @@ namespace LMCSHD
         {
             DataContext = this;
             InitializeComponent();
+            // InitializeComponent fired the sliders' default ValueChanged, clobbering MatrixFrame
+            // back to 1.0/1.0. Load prefs now and re-sync the slider UI to the loaded values;
+            // the resulting ValueChanged just writes the same value back into MatrixFrame.
+            MatrixFrame.LoadDisplayPrefs();
+            BrightnessSlider.Value = MatrixFrame.Brightness * 100.0;
+            GammaSlider.Value = MatrixFrame.Gamma;
+
             MatrixFrame.DimensionsChanged += OnMatrixDimensionsChanged;
 
             MatrixFrame.FrameChanged += OnFrameChanged;
@@ -31,9 +38,29 @@ namespace LMCSHD
         }
         private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e)
         {
+            MatrixFrame.SaveDisplayPrefs();
             EndAllThreads();
             SerialManager.Disconnect();
             while (SerialManager.IsConnected()) SerialManager.Disconnect();
+        }
+
+        private void BrightnessSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            MatrixFrame.Brightness = (float)(e.NewValue / 100.0);
+            MatrixFrame.Refresh();
+        }
+        private void GammaSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            MatrixFrame.Gamma = (float)e.NewValue;
+            MatrixFrame.Refresh();
+        }
+        private void BrightnessReset_Click(object sender, RoutedEventArgs e)
+        {
+            BrightnessSlider.Value = MatrixFrame.BrightnessDefault * 100.0;
+        }
+        private void GammaReset_Click(object sender, RoutedEventArgs e)
+        {
+            GammaSlider.Value = MatrixFrame.GammaDefault;
         }
 
         private void OnFrameChanged()

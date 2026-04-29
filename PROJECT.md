@@ -7,7 +7,8 @@ Personal fork of [`TechRandom/LMCSHD-TR`](https://github.com/TechRandom/LMCSHD-T
 - [x] **Feature 1: Native multi-panel section support** — Section data model + section-aware serial output + dialog UI + persistence; firmware demux removed
 - [x] **Feature 2: Per-section orientation** — covered by Feature 1 (every Section row has its own Orientation/Origin/NewLine)
 - [ ] **Feature 3: Direct WebSocket from PC** — large architectural change, save for last
-- [ ] **Feature 4: Brightness / gamma / dithering controls** — small UX addition, *next up*
+- [x] **Feature 4a: Brightness / gamma controls** — sliders + LUT in `EmitRegion`, persisted to `display-prefs.dat`
+- [ ] **Feature 4b: Dithering** — deferred; would hook in `SerialManager` color-quantization paths
 - [x] **Feature 5: Built-in test patterns** — solid color / walking pixel / per-section color
 
 ## Hardware target
@@ -64,20 +65,19 @@ Walking pixel uses `MatrixFrame.GetChainOrderCoords()`, which mirrors `GetOrdere
 
 ## Remaining features
 
-### Feature 4: Brightness / gamma / dithering — *next*
+### Feature 4a: Brightness / gamma — *done*
 
-Move brightness scaling out of firmware and into LMCSHD. Add gamma correction (LEDs are perceptually awful at low values without it). Possibly add temporal/spatial dithering for low-brightness regions.
+`MatrixFrame.Brightness` (0..1) and `MatrixFrame.Gamma` (0.1..5) drive a 256-entry `byte[] _lut` (formula: `out = round(255 * pow((in/255) * brightness, gamma))`). Setters clamp and rebuild the LUT. `EmitRegion` reads through `_lut` for every R/G/B byte it emits — single hook point covers no-sections and sectioned paths, HZ and VT branches. `AppendRegionCoords` is unchanged because it doesn't touch color data; the "keep parallel helpers in sync" rule didn't apply here.
 
-**Acceptance:** brightness slider scales output 0–100% smoothly, gamma slider produces a correct-looking greyscale ramp, dithering visibly reduces banding (if implemented).
+UI: a strip below the tab/preview area in `MainWindow.xaml` (Grid row 2, `ColumnSpan=3`), always visible across tabs. Two `<Slider>`s — Brightness 0–100%, Gamma 0.5–3.0 — with value labels. `ValueChanged` writes through to `MatrixFrame` and calls `Refresh()` so static frames update immediately.
 
-**Likely shape:** new properties on `MatrixFrame` (`Brightness`, `Gamma`) plus a transform step somewhere in the pipeline. Two reasonable hook points:
+Persistence: `%LOCALAPPDATA%\LMCSHD-JJ\display-prefs.dat`, key=value lines (`brightness 0.7` / `gamma 2.2`), invariant culture. Loaded right after `InitializeComponent` and slider values re-synced from the loaded values; saved in `Window_Closing`. Defaults are 1.0/1.0 (no-op) so first launch matches pre-Feature-4 behavior.
 
-- Apply the transform inside `GetOrderedSerialFrame()` / `EmitRegion()` per pixel as it's emitted to the byte stream.
-- Or apply it in `SerialManager.PushFrame()` after the ordered bytes are built but before color-depth conversion.
+Note: brightness/gamma do *not* currently apply to the matrix preview image, only to serial output. Preview is treated as the "source content" view; the wall is the "output" view.
 
-The first keeps `SerialManager` untouched but means modifying the per-pixel write site twice (HZ + VT branches). The second is more localized but operates on bytes, which is awkward for gamma. Probably go with the first.
+### Feature 4b: Dithering — *deferred*
 
-UI: a top-level brightness/gamma group near the matrix preview is most discoverable. Or a third row in an existing tab. Persist to user settings.
+Spatial (Bayer) or temporal dithering at the bit-depth quantization step inside `SerialManager.PushFrame`'s BPP16 / BPP8 branches. Worth doing if banding shows up after gamma at low brightness; not urgent. Separate hook point from 4a (operates on bytes mid-quantization, not on `Frame[]`).
 
 ### Feature 3: Direct WebSocket from PC — *largest architectural change*
 
@@ -94,7 +94,7 @@ Skip the source ESP entirely. LMCSHD opens a WebSocket connection per receiver a
 ### LMCSHD-JJ files (under `LMCSHD/LMCSHD/`)
 
 - `App.xaml.cs` — global structs: `Pixel`, `PixelOrder` (with nested `Orientation`/`StartCorner`/`NewLine` enums), `Section`, `MatrixTitle`.
-- `MatrixFrame.cs` — pixel buffer, dimensions, sections list, `GetOrderedSerialFrame`, `GetChainOrderCoords`, `EmitRegion`/`AppendRegionCoords` (parallel traversal helpers — **keep in sync**), `SaveSections`/`LoadSections`/`SectionsFilePath`, `LoadEmbeddedBitmap` (replaces former `Properties.Resources.X` usages so the project builds without `Resources.resx`).
+- `MatrixFrame.cs` — pixel buffer, dimensions, sections list, `GetOrderedSerialFrame`, `GetChainOrderCoords`, `EmitRegion`/`AppendRegionCoords` (parallel traversal helpers — **keep in sync**), `SaveSections`/`LoadSections`/`SectionsFilePath`, `Brightness`/`Gamma` + `_lut` (consumed only in `EmitRegion`), `SaveDisplayPrefs`/`LoadDisplayPrefs`/`DisplayPrefsFilePath`, `LoadEmbeddedBitmap` (replaces former `Properties.Resources.X` usages so the project builds without `Resources.resx`).
 - `SerialManager.cs` — protocol handling (`0x05`/`0x41`/`0x42`/`0x06`), color mode → opcode mapping, frame transmission. Buffer sizing in non-RGB888 branches uses `Width * Height` rather than `orderedFrame.Length / 3` — fine while sections cover the full matrix; revisit if partial coverage is ever supported.
 - `MainWindow.xaml` — root UI: menu (`File`, `Serial`, `Edit → Matrix Dimensions / Sections... / Pixel Order / Color Mode`, `View`, `About`) and tabs (Screen Recorder, Audio, Imaging, **Test Patterns**, Drawing/disabled).
 - `MainWindow.xaml.cs` — partial; menu click handlers, MatrixImage events.
@@ -145,7 +145,7 @@ Common diagnostic moves:
 ## Open questions
 
 - **Migrate to SDK-style csproj or .NET 8?** Would let `dotnet build` work and unlock cross-platform tooling. Standalone task, not blocking anything else.
-- **Persistence scope:** sections persist per matrix dimension. Should we also persist global orientation/startCorner/newLine, color mode, last COM port, brightness/gamma (when they exist)? Currently those reset to defaults each launch.
+- **Persistence scope:** sections persist per matrix dimension; brightness/gamma persist globally as `display-prefs.dat`. Should we also persist global orientation/startCorner/newLine, color mode, last COM port? Currently those reset to defaults each launch.
 - **Upstream sync policy:** the `upstream` git remote points to `TechRandom/LMCSHD-TR`. Decide whether to merge upstream commits or diverge.
 
 ## Out of scope (for now)
@@ -176,11 +176,13 @@ It covers: hardware, architecture, protocol, what's been built (with code
 pointers), what's left, build instructions, test loop, and known scaffolding.
 
 Quick status:
-- Features 1, 2, 5 are done and verified on the actual wall.
-- Feature 4 (brightness / gamma / dithering controls in LMCSHD) is the next
-  task and is the one I want to start on now.
+- Features 1, 2, 4a, 5 are done. Features 1, 2, 5 are verified on the actual
+  wall; Feature 4a (brightness/gamma) builds clean but still needs on-wall
+  verification.
+- Feature 4b (dithering) is deferred — only do it if banding shows up after
+  gamma at low brightness.
 - Feature 3 (direct WebSocket from PC, killing the source ESP) is the last
-  feature, deferred until after 4.
+  feature.
 
 Non-obvious gotchas you must know up front:
 

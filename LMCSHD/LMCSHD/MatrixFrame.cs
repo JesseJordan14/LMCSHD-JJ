@@ -31,6 +31,54 @@ namespace LMCSHD
         // Temp scaffolding for multi-panel milestone 1.1: auto-configure 2 sections
         // when matrix is 32x32. Remove once a real Sections UI exists.
         public static bool UseTestSectionsOn32x32 = true;
+
+        // Output transform: brightness scaling + gamma correction applied per-channel
+        // in EmitRegion via _lut. Defaults are no-op (Brightness=1, Gamma=1).
+        // Only EmitRegion consumes _lut — AppendRegionCoords doesn't, since coords
+        // carry no color data.
+        public const float BrightnessDefault = 1.0f;
+        public const float GammaDefault = 1.0f;
+        private static float _brightness = BrightnessDefault;
+        public static float Brightness
+        {
+            get { return _brightness; }
+            set
+            {
+                float v = value < 0f ? 0f : (value > 1f ? 1f : value);
+                if (v != _brightness) { _brightness = v; RebuildLut(); }
+            }
+        }
+        private static float _gamma = GammaDefault;
+        public static float Gamma
+        {
+            get { return _gamma; }
+            set
+            {
+                float v = value < 0.1f ? 0.1f : (value > 5.0f ? 5.0f : value);
+                if (v != _gamma) { _gamma = v; RebuildLut(); }
+            }
+        }
+        private static byte[] _lut = BuildIdentityLut();
+
+        private static byte[] BuildIdentityLut()
+        {
+            var t = new byte[256];
+            for (int i = 0; i < 256; i++) t[i] = (byte)i;
+            return t;
+        }
+        private static void RebuildLut()
+        {
+            var t = new byte[256];
+            for (int i = 0; i < 256; i++)
+            {
+                double scaled = (i / 255.0) * _brightness;
+                double curved = Math.Pow(scaled, _gamma);
+                int v = (int)Math.Round(curved * 255.0);
+                if (v < 0) v = 0; else if (v > 255) v = 255;
+                t[i] = (byte)v;
+            }
+            _lut = t;
+        }
         #endregion
 
 
@@ -117,6 +165,52 @@ namespace LMCSHD
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "LMCSHD-JJ");
             return Path.Combine(dir, "sections-" + w + "x" + h + ".dat");
+        }
+
+        // Display prefs: brightness + gamma. One key=value pair per line, invariant culture.
+        // Single global file (not per-dimension) — these are user-display preferences, not matrix layout.
+        public static void SaveDisplayPrefs()
+        {
+            try
+            {
+                string path = DisplayPrefsFilePath();
+                Directory.CreateDirectory(Path.GetDirectoryName(path));
+                var ic = System.Globalization.CultureInfo.InvariantCulture;
+                using (var writer = new StreamWriter(path, false))
+                {
+                    writer.WriteLine("brightness " + _brightness.ToString(ic));
+                    writer.WriteLine("gamma " + _gamma.ToString(ic));
+                }
+            }
+            catch { /* best-effort */ }
+        }
+
+        public static void LoadDisplayPrefs()
+        {
+            string path = DisplayPrefsFilePath();
+            if (!File.Exists(path)) return;
+            try
+            {
+                var ic = System.Globalization.CultureInfo.InvariantCulture;
+                foreach (var line in File.ReadAllLines(path))
+                {
+                    var p = line.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                    if (p.Length != 2) continue;
+                    float v;
+                    if (!float.TryParse(p[1], System.Globalization.NumberStyles.Float, ic, out v)) continue;
+                    if (p[0] == "brightness") Brightness = v;
+                    else if (p[0] == "gamma") Gamma = v;
+                }
+            }
+            catch { /* ignore corrupt file */ }
+        }
+
+        private static string DisplayPrefsFilePath()
+        {
+            string dir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "LMCSHD-JJ");
+            return Path.Combine(dir, "display-prefs.dat");
         }
 
         // Configures Sections for the author's 2x (16x32) wall.
@@ -206,6 +300,7 @@ namespace LMCSHD
             int termY  = (s.StartCorner == StartCorner.BL || s.StartCorner == StartCorner.BR) ? -1 : s.Height;
             int incY   = (s.StartCorner == StartCorner.BL || s.StartCorner == StartCorner.BR) ? -1 : 1;
 
+            byte[] lut = _lut;
             if (s.Orientation == Orientation.HZ)
             {
                 for (int y = startY; y != termY; y += incY)
@@ -214,9 +309,9 @@ namespace LMCSHD
                     {
                         int localX = (s.NewLine == NewLine.SC || y % 2 == 0) ? x : s.Width - 1 - x;
                         int globalIndex = (s.Y + y) * Width + (s.X + localX);
-                        buf[offset++] = Frame[globalIndex].R;
-                        buf[offset++] = Frame[globalIndex].G;
-                        buf[offset++] = Frame[globalIndex].B;
+                        buf[offset++] = lut[Frame[globalIndex].R];
+                        buf[offset++] = lut[Frame[globalIndex].G];
+                        buf[offset++] = lut[Frame[globalIndex].B];
                     }
                 }
             }
@@ -228,9 +323,9 @@ namespace LMCSHD
                     {
                         int localY = (s.NewLine == NewLine.SC || x % 2 == 0) ? y : s.Height - 1 - y;
                         int globalIndex = (s.Y + localY) * Width + (s.X + x);
-                        buf[offset++] = Frame[globalIndex].R;
-                        buf[offset++] = Frame[globalIndex].G;
-                        buf[offset++] = Frame[globalIndex].B;
+                        buf[offset++] = lut[Frame[globalIndex].R];
+                        buf[offset++] = lut[Frame[globalIndex].G];
+                        buf[offset++] = lut[Frame[globalIndex].B];
                     }
                 }
             }

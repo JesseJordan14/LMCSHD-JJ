@@ -56,6 +56,7 @@
             <Grid.RowDefinitions>
                 <RowDefinition Height="20"/>
                 <RowDefinition Height="*"/>
+                <RowDefinition Height="auto"/>
             </Grid.RowDefinitions>
             <DockPanel Grid.ColumnSpan="3">
                 <Menu>
@@ -626,6 +627,34 @@
 
                 </TabItem>
             </TabControl>
+
+            <Border Grid.Row="2" Grid.ColumnSpan="3" Margin="2,4,2,2" BorderBrush="Gray" BorderThickness="0,1,0,0">
+                <StackPanel Orientation="Horizontal" Margin="6,4,6,4">
+                    <TextBlock Text="Brightness" VerticalAlignment="Center" Margin="2"/>
+                    <Slider x:Name="BrightnessSlider"
+                            Width="220"
+                            Minimum="0" Maximum="100"
+                            Value="100"
+                            SmallChange="1" LargeChange="10"
+                            ValueChanged="BrightnessSlider_ValueChanged"/>
+                    <TextBlock VerticalAlignment="Center" Width="42" Margin="2"
+                               Text="{Binding ElementName=BrightnessSlider, Path=Value, StringFormat={}{0:0}%}"/>
+                    <Button Content="Reset" Width="50" Margin="2" Click="BrightnessReset_Click"
+                            ToolTip="Reset brightness to default (100%)"/>
+
+                    <TextBlock Text="Gamma" VerticalAlignment="Center" Margin="16,2,2,2"/>
+                    <Slider x:Name="GammaSlider"
+                            Width="220"
+                            Minimum="0.5" Maximum="3.0"
+                            Value="1.0"
+                            SmallChange="0.05" LargeChange="0.25"
+                            ValueChanged="GammaSlider_ValueChanged"/>
+                    <TextBlock VerticalAlignment="Center" Width="42" Margin="2"
+                               Text="{Binding ElementName=GammaSlider, Path=Value, StringFormat={}{0:0.00}}"/>
+                    <Button Content="Reset" Width="50" Margin="2" Click="GammaReset_Click"
+                            ToolTip="Reset gamma to default (1.00)"/>
+                </StackPanel>
+            </Border>
         </Grid>
     </Grid>
 </Window>
