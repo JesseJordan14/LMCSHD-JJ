@@ -158,6 +158,7 @@
     <Compile Include="MainWindowAudio.cs" />
     <Compile Include="MainWindowImaging.cs" />
     <Compile Include="MainWindowScreenCapture.cs" />
+    <Compile Include="MainWindowTestPatterns.cs" />
     <Compile Include="MatrixConnection.xaml.cs">
       <DependentUpon>MatrixConnection.xaml</DependentUpon>
     </Compile>

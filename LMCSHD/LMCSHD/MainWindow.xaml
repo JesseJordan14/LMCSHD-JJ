@@ -588,6 +588,40 @@
                     </Grid>
                 </TabItem>
 
+                <TabItem Header="Test Patterns">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="auto"/>
+                            <RowDefinition Height="auto"/>
+                            <RowDefinition Height="auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+
+                        <GroupBox Grid.Row="0" Header="Solid Color" Margin="2">
+                            <StackPanel Orientation="Horizontal">
+                                <xctk:ColorPicker Width="120" SelectedColor="{Binding TPSolidColor, Mode=TwoWay}" Margin="2" UsingAlphaChannel="False"/>
+                                <Button Content="Fill" Click="TP_SolidFill_Click" Margin="2" Width="60"/>
+                                <Button Content="Clear" Click="TP_Clear_Click" Margin="2" Width="60"/>
+                            </StackPanel>
+                        </GroupBox>
+
+                        <GroupBox Grid.Row="1" Header="Walking Pixel" Margin="2">
+                            <StackPanel>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="LED/s" Margin="2" VerticalAlignment="Center"/>
+                                    <Slider Width="160" Minimum="1" Maximum="200" Value="{Binding TPWalkSpeed, Mode=TwoWay}" SmallChange="1"/>
+                                    <xctk:IntegerUpDown Value="{Binding TPWalkSpeed, Mode=TwoWay}" Minimum="1" Maximum="200"/>
+                                </StackPanel>
+                                <ToggleButton Content="Walk" IsChecked="{Binding TPWalkActive, Mode=TwoWay}" Margin="2"/>
+                            </StackPanel>
+                        </GroupBox>
+
+                        <GroupBox Grid.Row="2" Header="Per-Section ID" Margin="2">
+                            <Button Content="Show" Click="TP_PerSection_Click" Margin="2" Width="60" HorizontalAlignment="Left"/>
+                        </GroupBox>
+                    </Grid>
+                </TabItem>
+
                 <TabItem Header="Drawing" IsEnabled="False">
 
                 </TabItem>

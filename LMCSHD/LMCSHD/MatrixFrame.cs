@@ -154,6 +154,49 @@ namespace LMCSHD
             return outBuf;
         }
 
+        // Returns each LED's (x, y) in the order it appears in the LED chain,
+        // accounting for sections / global serpentine. Used by test patterns
+        // (e.g. walking pixel) to step through LEDs in physical chain order.
+        public static List<Point> GetChainOrderCoords()
+        {
+            var list = new List<Point>(Width * Height);
+            if (Sections == null || Sections.Count == 0)
+                AppendRegionCoords(list, new Section(0, 0, Width, Height, orientation, startCorner, newLine));
+            else
+                foreach (var s in Sections)
+                    AppendRegionCoords(list, s);
+            return list;
+        }
+
+        private static void AppendRegionCoords(List<Point> list, Section s)
+        {
+            int startX = (s.StartCorner == StartCorner.TR || s.StartCorner == StartCorner.BR) ? s.Width - 1 : 0;
+            int termX  = (s.StartCorner == StartCorner.TR || s.StartCorner == StartCorner.BR) ? -1 : s.Width;
+            int incX   = (s.StartCorner == StartCorner.TR || s.StartCorner == StartCorner.BR) ? -1 : 1;
+            int startY = (s.StartCorner == StartCorner.BL || s.StartCorner == StartCorner.BR) ? s.Height - 1 : 0;
+            int termY  = (s.StartCorner == StartCorner.BL || s.StartCorner == StartCorner.BR) ? -1 : s.Height;
+            int incY   = (s.StartCorner == StartCorner.BL || s.StartCorner == StartCorner.BR) ? -1 : 1;
+
+            if (s.Orientation == Orientation.HZ)
+            {
+                for (int y = startY; y != termY; y += incY)
+                    for (int x = startX; x != termX; x += incX)
+                    {
+                        int localX = (s.NewLine == NewLine.SC || y % 2 == 0) ? x : s.Width - 1 - x;
+                        list.Add(new Point(s.X + localX, s.Y + y));
+                    }
+            }
+            else
+            {
+                for (int x = startX; x != termX; x += incX)
+                    for (int y = startY; y != termY; y += incY)
+                    {
+                        int localY = (s.NewLine == NewLine.SC || x % 2 == 0) ? y : s.Height - 1 - y;
+                        list.Add(new Point(s.X + x, s.Y + localY));
+                    }
+            }
+        }
+
         private static int EmitRegion(byte[] buf, int offset, Section s)
         {
             int startX = (s.StartCorner == StartCorner.TR || s.StartCorner == StartCorner.BR) ? s.Width - 1 : 0;
