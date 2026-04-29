@@ -15,10 +15,10 @@ Personal fork of [`TechRandom/LMCSHD-TR`](https://github.com/TechRandom/LMCSHD-T
 - [x] **Feature 2: Per-section orientation** *(covered by Feature 1: every Section row in the dialog has its own Orientation/Origin/NewLine)*
 - [ ] **Feature 3: Direct WebSocket from PC**
 - [ ] **Feature 4: Brightness / gamma / dithering controls**
-- [ ] **Feature 5: Built-in test patterns**
-  - [ ] Solid color (color picker + Fill / Clear)
-  - [ ] Walking pixel (one LED at a time, in chain order)
-  - [ ] Per-section color (each section gets a distinct color so you can see which physical panel is which)
+- [x] **Feature 5: Built-in test patterns**
+  - [x] Solid color (color picker + Fill / Clear)
+  - [x] Walking pixel (one LED at a time, in chain order)
+  - [x] Per-section color (each section gets a distinct color so you can see which physical panel is which)
 
 ## Why fork
 
