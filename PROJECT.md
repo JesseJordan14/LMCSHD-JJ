@@ -10,7 +10,8 @@ Personal fork of [`TechRandom/LMCSHD-TR`](https://github.com/TechRandom/LMCSHD-T
   - [x] Wire section-aware pixel ordering into the `0x42` frame transmit path
   - [x] Update source firmware to drop the per-pixel demux loop
   - [x] End-to-end test on the 32×32 wall
-  - [ ] Add a Sections configuration UI (load/save per session)
+  - [x] Add a Sections configuration UI (Edit → Sections... menu)
+  - [ ] Persist sections across launches (Settings or JSON)
 - [ ] **Feature 2: Per-section orientation** *(largely falls out of Feature 1)*
 - [ ] **Feature 3: Direct WebSocket from PC**
 - [ ] **Feature 4: Brightness / gamma / dithering controls**
@@ -120,6 +121,18 @@ Built-in debug patterns selectable from the UI:
 - **Migrate to .NET 8?** The upstream is on .NET Framework 4.7.2. Migrating to modern .NET would simplify tooling and unlock cross-platform builds, but is its own project.
 - **Scope creep guard:** keep features 1–2 self-contained; resist mixing them with (3) until (1) is shipping.
 - **Upstream sync:** the `upstream` git remote is wired to `TechRandom/LMCSHD-TR`. Decide policy on pulling in upstream commits vs. diverging.
+
+## Building
+
+The project is old-style .NET Framework 4.7.2 WPF and **does not build with `dotnet build`** — that toolchain doesn't carry the full WPF compilation targets for this project format. Build with Visual Studio's MSBuild:
+
+```
+"C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe" LMCSHD\LMCSHD_WPF.sln
+```
+
+(adjust the VS year if you have a different install). Or open `LMCSHD\LMCSHD_WPF.sln` in Visual Studio and hit Ctrl+B.
+
+Output ends up in `LMCSHD\LMCSHD\bin\x64\Debug\LMCSHD.exe`.
 
 ## Out of scope (for now)
 

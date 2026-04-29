@@ -29,7 +29,7 @@ namespace LMCSHD
         private int _imInterpolationModeIndex = 3;
 
         private BitmapSource _contentBitmap;
-        private BitmapSource _gifPlayPauseImage = MatrixFrame.CreateBitmapSourceFromBitmap(Properties.Resources.icons8_play_32);
+        private BitmapSource _gifPlayPauseImage = MatrixFrame.CreateBitmapSourceFromBitmap(MatrixFrame.LoadEmbeddedBitmap("pack://application:,,,/Images/Menu/icons8-play-32.png"));
 
 
         private static DispatcherTimer GifTimer = new DispatcherTimer();
@@ -219,12 +219,12 @@ namespace LMCSHD
                     {
                         if (value == true)
                         {
-                            GifPlayPauseImage = MatrixFrame.CreateBitmapSourceFromBitmap(Properties.Resources.icons8_stop_32);
+                            GifPlayPauseImage = MatrixFrame.CreateBitmapSourceFromBitmap(MatrixFrame.LoadEmbeddedBitmap("pack://application:,,,/Images/Menu/icons8-stop-32.png"));
                             StartGif();
                         }
                         else
                         {
-                            GifPlayPauseImage = MatrixFrame.CreateBitmapSourceFromBitmap(Properties.Resources.icons8_play_32);
+                            GifPlayPauseImage = MatrixFrame.CreateBitmapSourceFromBitmap(MatrixFrame.LoadEmbeddedBitmap("pack://application:,,,/Images/Menu/icons8-play-32.png"));
                             StopGif();
                         }
                         _gifPlayPause = value;

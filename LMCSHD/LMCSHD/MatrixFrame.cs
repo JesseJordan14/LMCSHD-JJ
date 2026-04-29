@@ -44,15 +44,20 @@ namespace LMCSHD
 
         public static void SetDimensions(int w, int h)
         {
+            bool dimensionsChanged = (w != Width || h != Height);
             Width = w;
             Height = h;
             Frame = null;
             Frame = new Pixel[Width * Height];
 
-            if (UseTestSectionsOn32x32 && w == 32 && h == 32)
+            // Sections may now extend past the new matrix size; safer to drop them.
+            if (dimensionsChanged) Sections.Clear();
+
+            // Scaffolding: if no sections are defined yet on a 32x32 matrix, pre-populate
+            // the author's two-panel layout so first-run users don't see a broken wall.
+            // Once persistence lands this can go.
+            if (UseTestSectionsOn32x32 && w == 32 && h == 32 && Sections.Count == 0)
                 UseTestSections_TwoPanels32x32();
-            else
-                Sections.Clear();
 
             OnDimensionsChanged();
         }
@@ -289,6 +294,15 @@ namespace LMCSHD
                 g.Save();
             }
             return result;
+        }
+
+        // Loads a PNG that is included as a WPF <Resource> in this assembly.
+        // Replaces the old Properties.Resources.X path so we don't depend on
+        // Resources.resx (which trips MSB3822 on modern .NET SDKs).
+        public static Bitmap LoadEmbeddedBitmap(string packPath)
+        {
+            var sri = System.Windows.Application.GetResourceStream(new Uri(packPath, UriKind.Absolute));
+            return new Bitmap(sri.Stream);
         }
 
         public static BitmapSource CreateBitmapSourceFromBitmap(Bitmap bitmap)

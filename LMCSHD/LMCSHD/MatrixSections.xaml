@@ -1,0 +1,59 @@
+<Window x:Class="LMCSHD.MatrixSections"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:LMCSHD"
+        mc:Ignorable="d"
+        Title="Matrix Sections" Height="360" Width="720" ResizeMode="CanResize" WindowStyle="ToolWindow">
+    <Grid Margin="6">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="auto"/>
+            <RowDefinition Height="auto"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Margin="2" TextWrapping="Wrap"
+                   Text="Define how the global matrix is split into panels. Each section's bytes are emitted in list order: section 1 → Device 1, section 2 → Device 2, etc. Leave the list empty to fall back to the global pixel-order settings (single-panel mode)."/>
+
+        <DataGrid x:Name="SectionsGrid" Grid.Row="1" Margin="2"
+                  AutoGenerateColumns="False"
+                  ItemsSource="{Binding SectionList}"
+                  CanUserAddRows="False" CanUserDeleteRows="False"
+                  CanUserReorderColumns="False"
+                  HeadersVisibility="Column"
+                  SelectionMode="Single"
+                  SelectionUnit="FullRow">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="X" Binding="{Binding X}" Width="60"/>
+                <DataGridTextColumn Header="Y" Binding="{Binding Y}" Width="60"/>
+                <DataGridTextColumn Header="Width" Binding="{Binding Width}" Width="80"/>
+                <DataGridTextColumn Header="Height" Binding="{Binding Height}" Width="80"/>
+                <DataGridComboBoxColumn Header="Orientation"
+                                        SelectedItemBinding="{Binding Orientation, Mode=TwoWay}"
+                                        ItemsSource="{x:Static local:MatrixSections.OrientationValues}"
+                                        Width="100"/>
+                <DataGridComboBoxColumn Header="Origin"
+                                        SelectedItemBinding="{Binding StartCorner, Mode=TwoWay}"
+                                        ItemsSource="{x:Static local:MatrixSections.StartCornerValues}"
+                                        Width="80"/>
+                <DataGridComboBoxColumn Header="New Line"
+                                        SelectedItemBinding="{Binding NewLine, Mode=TwoWay}"
+                                        ItemsSource="{x:Static local:MatrixSections.NewLineValues}"
+                                        Width="80"/>
+            </DataGrid.Columns>
+        </DataGrid>
+
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Left">
+            <Button Margin="2" Width="80" Content="Add" Click="Add_Click"/>
+            <Button Margin="2" Width="80" Content="Remove" Click="Remove_Click"/>
+            <Button Margin="2" Width="120" Content="Clear All" Click="ClearAll_Click"/>
+        </StackPanel>
+
+        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Margin="2" Width="80" Content="OK" Click="OK_Click" IsDefault="True"/>
+            <Button Margin="2" Width="80" Content="Cancel" Click="Cancel_Click" IsCancel="True"/>
+        </StackPanel>
+    </Grid>
+</Window>

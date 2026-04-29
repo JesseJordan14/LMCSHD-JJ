@@ -26,7 +26,7 @@ namespace LMCSHD
             MatrixFrame.SetDimensions(MatrixFrame.Width, MatrixFrame.Height);
             InitializeScreenCaptureUI();
             InitializeAudioCaptureUI();
-            MatrixFrame.BitmapToFrame(Properties.Resources.Icon16, System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor);
+            MatrixFrame.BitmapToFrame(MatrixFrame.LoadEmbeddedBitmap("pack://application:,,,/Images/Icon16.png"), System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor);
             //FrameToPreview();
         }
         private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e)
@@ -307,6 +307,16 @@ namespace LMCSHD
                 WindowStartupLocation = System.Windows.WindowStartupLocation.CenterOwner
             };
             md.ShowDialog();
+        }
+
+        private void MenuItem_Edit_Sections_Click(object sender, RoutedEventArgs e)
+        {
+            MatrixSections ms = new MatrixSections
+            {
+                Owner = this,
+                WindowStartupLocation = System.Windows.WindowStartupLocation.CenterOwner
+            };
+            ms.ShowDialog();
         }
     }
 }

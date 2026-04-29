@@ -85,6 +85,7 @@
                                 <Image Source="/Images/Menu/icons8-enlarge-32.png"/>
                             </MenuItem.Icon>
                         </MenuItem>
+                        <MenuItem Header="Sections..." Click="MenuItem_Edit_Sections_Click"/>
                         <MenuItem Header="Pixel Order">
                             <MenuItem.Icon>
                                 <Image Source="/Images/Menu/icons8-numbers-input-form-32.png" />
