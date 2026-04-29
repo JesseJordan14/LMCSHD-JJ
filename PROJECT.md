@@ -154,3 +154,54 @@ Common diagnostic moves:
 - Web-based UI / Electron rewrite
 - Cross-platform builds (Linux/Mac)
 - Audio reactivity beyond what upstream already supports
+
+## Continuation prompt for a new Claude session
+
+Paste the block below into a fresh Claude session to bootstrap context and pick up where we left off. Update the "What I want to do now" section to match the current task before sending.
+
+```
+I'm continuing work on a personal LED-wall hobby project. Two repos are involved:
+
+1. C:\Users\16jjo\OneDrive\Documents\GitHub\LED_Display
+   ESP8266 firmware (Arduino sketches) for a 32×32 WS2812B wall (two side-by-side
+   16×32 panels, each driven by its own ESP, plus a "source" ESP that talks to
+   the PC over USB and forwards frames over WebSocket).
+
+2. C:\Users\16jjo\OneDrive\Documents\GitHub\LMCSHD-JJ
+   My fork of TechRandom/LMCSHD-TR, the screen-mirroring desktop app that streams
+   pixels to the source ESP. This is where most of the active work happens.
+
+START BY READING `LMCSHD-JJ\PROJECT.md` — it's the canonical state document.
+It covers: hardware, architecture, protocol, what's been built (with code
+pointers), what's left, build instructions, test loop, and known scaffolding.
+
+Quick status:
+- Features 1, 2, 5 are done and verified on the actual wall.
+- Feature 4 (brightness / gamma / dithering controls in LMCSHD) is the next
+  task and is the one I want to start on now.
+- Feature 3 (direct WebSocket from PC, killing the source ESP) is the last
+  feature, deferred until after 4.
+
+Non-obvious gotchas you must know up front:
+
+- Build LMCSHD-JJ with Visual Studio's MSBuild (path in PROJECT.md), NOT
+  `dotnet build`. The latter fails on this old-style .NET Framework 4.7.2 WPF
+  project regardless of SDK version. Output is bin\x64\Debug\LMCSHD.exe.
+- WiFi credentials live in gitignored secrets.h files in each Arduino sketch
+  folder. Templates are in secrets.example.h. Never commit real creds.
+- Source ESP is at static IP 10.0.0.121 on a 10.0.0.x network.
+- There's intentional scaffolding in MatrixFrame.UseTestSectionsOn32x32 that
+  PROJECT.md flags for eventual removal — don't reflexively "clean it up."
+- `MatrixFrame.GetOrderedSerialFrame` / `EmitRegion` and `GetChainOrderCoords`
+  / `AppendRegionCoords` share traversal logic in parallel helpers. If you
+  change one, change the other.
+
+What I want to do now:
+
+Start Feature 4. Read PROJECT.md, glance at MatrixFrame.cs and
+SerialManager.cs to confirm the current pipeline, then propose a plan: where
+the brightness / gamma transform should hook in, what UI (controls + where
+they live), what persistence (if any), and the test plan. Don't write code
+yet — get my agreement on the approach first. Keep the proposal focused on
+Feature 4. Don't pre-plan Feature 3.
+```
