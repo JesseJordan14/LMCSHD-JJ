@@ -25,6 +25,18 @@ namespace LMCSHD
         private static readonly ConcurrentDictionary<int, IWebSocketConnection> _devices =
             new ConcurrentDictionary<int, IWebSocketConnection>();
 
+        // Per-device "ready for next frame" gate. True after a 0x06 ack arrives
+        // (or right after identification, before any frame has been pushed).
+        // Cleared per-device when we send that device a frame; set by ack.
+        private static readonly ConcurrentDictionary<int, bool> _deviceReady =
+            new ConcurrentDictionary<int, bool>();
+
+        // Set when OnFrameChanged fires while waiting for acks. Cleared when
+        // we successfully push the queued state. Effectively "the source has
+        // newer state we haven't shipped yet"; on the final ack we flush it.
+        private static volatile bool _pendingFrame = false;
+        private static readonly object _flushLock = new object();
+
         // Events fire on Fleck's worker threads — subscribers must marshal to
         // the UI dispatcher themselves (same pattern as SerialManager).
         public delegate void ReceiverIdentifiedHandler(int deviceNum);
@@ -57,6 +69,9 @@ namespace LMCSHD
                     socket.OnBinary = bytes => OnBinaryMessage(socket, bytes);
                 });
                 ListenPort = port;
+
+                MatrixFrame.FrameChanged -= OnFrameChanged;
+                MatrixFrame.FrameChanged += OnFrameChanged;
                 return true;
             }
             catch (SocketException)
@@ -68,6 +83,8 @@ namespace LMCSHD
 
         public static void Disconnect()
         {
+            MatrixFrame.FrameChanged -= OnFrameChanged;
+
             // Fleck's WebSocketServer.Dispose() closes only the listener socket
             // — established client connections are NOT torn down. If we don't
             // close them ourselves, the receiver firmware never sees a close
@@ -92,6 +109,8 @@ namespace LMCSHD
             lock (_pendingLock) { _pending.Clear(); }
             var nums = new List<int>(_devices.Keys);
             _devices.Clear();
+            _deviceReady.Clear();
+            _pendingFrame = false;
             foreach (var n in nums) ReceiverDisconnected?.Invoke(n);
         }
 
@@ -114,7 +133,14 @@ namespace LMCSHD
             {
                 IWebSocketConnection _;
                 _devices.TryRemove(identifiedNum.Value, out _);
+                bool _b;
+                _deviceReady.TryRemove(identifiedNum.Value, out _b);
                 ReceiverDisconnected?.Invoke(identifiedNum.Value);
+
+                // The departing device may have been the last holdout for a
+                // pending frame. Try to flush now that we're no longer waiting
+                // on it.
+                TryFlushPending();
             }
         }
 
@@ -134,13 +160,136 @@ namespace LMCSHD
                 ReceiverDisconnected?.Invoke(deviceNum);
             }
             _devices[deviceNum] = socket;
+            // Newly-identified devices start ready: we haven't sent them
+            // anything yet, so they don't owe us an ack.
+            _deviceReady[deviceNum] = true;
             lock (_pendingLock) { _pending.Remove(socket); }
             ReceiverIdentified?.Invoke(deviceNum);
         }
 
+        // Receivers send a single 0x06 byte (binary frame) after FastLED.show()
+        // to signal "ready for the next frame". Mark the sending device ready,
+        // then try to flush any pending frame that was held back while we were
+        // waiting on this ack.
         private static void OnBinaryMessage(IWebSocketConnection socket, byte[] bytes)
         {
-            // 3.5 will look for the 0x06 ack byte here. For now, ignore.
+            if (bytes == null || bytes.Length < 1 || bytes[0] != 0x06) return;
+
+            int? deviceNum = null;
+            foreach (var kv in _devices)
+            {
+                if (ReferenceEquals(kv.Value, socket)) { deviceNum = kv.Key; break; }
+            }
+            if (!deviceNum.HasValue) return;
+
+            _deviceReady[deviceNum.Value] = true;
+            TryFlushPending();
+        }
+
+        private static void OnFrameChanged()
+        {
+            PushFrame();
+        }
+
+        // Per-section frame routing with all-receivers-ready ack gating.
+        //
+        // Section index N → device N+1 (firmware DEVICE_NUM is 1-based; the
+        // Sections list is 0-indexed). Sections beyond the connected receiver
+        // count are silently skipped.
+        //
+        // Wire format is always BPP16 (5-6-5) regardless of SerialManager.ColorMode
+        // — receiver firmware (LED_Wall_Reciever.ino) only decodes 5-6-5 today.
+        // Edit → Color Mode menu and the serial-connect dialog disable other
+        // options to make this visible. Lift when firmware grows other decoders.
+        //
+        // Ack gating: we only push when every connected device is ready (last
+        // frame's 0x06 ack received). If a frame fires while we're still waiting
+        // on acks, we mark _pendingFrame and re-check on each incoming ack —
+        // that way the wall ends up showing the most recent state even when
+        // the producer outpaces the receivers, while panels stay locked together
+        // because we never start frame N+1 until both finished frame N.
+        public static void PushFrame()
+        {
+            lock (_flushLock)
+            {
+                if (_server == null) return;
+                if (_devices.IsEmpty) return;
+
+                if (AllDevicesReady_LockHeld())
+                {
+                    _pendingFrame = false;
+                    DoPushFrame_LockHeld();
+                }
+                else
+                {
+                    _pendingFrame = true;
+                }
+            }
+        }
+
+        private static void TryFlushPending()
+        {
+            lock (_flushLock)
+            {
+                if (!_pendingFrame) return;
+                if (_server == null) return;
+                if (_devices.IsEmpty) return;
+                if (!AllDevicesReady_LockHeld()) return;
+
+                _pendingFrame = false;
+                DoPushFrame_LockHeld();
+            }
+        }
+
+        private static bool AllDevicesReady_LockHeld()
+        {
+            foreach (var deviceNum in _devices.Keys)
+            {
+                bool ready;
+                if (!_deviceReady.TryGetValue(deviceNum, out ready) || !ready)
+                    return false;
+            }
+            return true;
+        }
+
+        private static void DoPushFrame_LockHeld()
+        {
+            var sectionFrames = MatrixFrame.GetSectionFrames();
+            for (int i = 0; i < sectionFrames.Count; i++)
+            {
+                int deviceNum = i + 1;
+                IWebSocketConnection conn;
+                if (!_devices.TryGetValue(deviceNum, out conn)) continue;
+
+                byte[] bpp16 = PackBPP16(sectionFrames[i]);
+                try
+                {
+                    conn.Send(bpp16);
+                    _deviceReady[deviceNum] = false;
+                }
+                catch { /* OnClose will fire and clean up if the socket is dead */ }
+            }
+        }
+
+        // RGB888 → 5-6-5 BPP16 packing. Byte0 = RRRRRGGG (top 5 of R, top 3 of G);
+        // Byte1 = GGGBBBBB (low 3 of G, top 5 of B). Matches the unpack in
+        // LED_Wall_Reciever.ino's webSocketEvent. Same bit layout as the BPP16
+        // branch in SerialManager.PushFrame; kept independent here because the
+        // serial path operates on the concatenated buffer and this one operates
+        // per-section. If a third caller ever needs BPP16, extract a shared helper.
+        private static byte[] PackBPP16(byte[] rgb888)
+        {
+            int pixels = rgb888.Length / 3;
+            byte[] outBuf = new byte[pixels * 2];
+            for (int i = 0; i < pixels; i++)
+            {
+                byte r = (byte)(rgb888[i * 3]     & 0xF8);
+                byte g = (byte)(rgb888[i * 3 + 1] & 0xFC);
+                byte b = (byte)(rgb888[i * 3 + 2] & 0xF8);
+                outBuf[i * 2]     = (byte)(r | (g >> 5));
+                outBuf[i * 2 + 1] = (byte)((g << 3) | (b >> 3));
+            }
+            return outBuf;
         }
     }
 }

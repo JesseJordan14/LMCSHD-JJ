@@ -248,6 +248,31 @@ namespace LMCSHD
             return outBuf;
         }
 
+        // Per-section RGB888 byte arrays in the same order as Sections (or one
+        // whole-matrix buffer when Sections is empty). Mirrors GetOrderedSerialFrame
+        // but keeps each section in its own buffer for transports that send
+        // independently per panel (NetworkManager). Both methods funnel through
+        // EmitRegion, which is the single source of truth for pixel order + LUT.
+        public static List<byte[]> GetSectionFrames()
+        {
+            var result = new List<byte[]>();
+            if (Sections == null || Sections.Count == 0)
+            {
+                var s = new Section(0, 0, Width, Height, orientation, startCorner, newLine);
+                var buf = new byte[s.PixelCount * 3];
+                EmitRegion(buf, 0, s);
+                result.Add(buf);
+                return result;
+            }
+            foreach (var s in Sections)
+            {
+                var buf = new byte[s.PixelCount * 3];
+                EmitRegion(buf, 0, s);
+                result.Add(buf);
+            }
+            return result;
+        }
+
         // Returns each LED's (x, y) in the order it appears in the LED chain,
         // accounting for sections / global serpentine. Used by test patterns
         // (e.g. walking pixel) to step through LEDs in physical chain order.

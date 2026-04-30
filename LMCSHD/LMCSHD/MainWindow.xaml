@@ -155,7 +155,10 @@
                             <MenuItem.Icon>
                                 <Image Source="/Images/Menu/icons8-color-mode-32.png" />
                             </MenuItem.Icon>
-                            <MenuItem Header="24bpp RGB" InputGestureText="True Color" Click="MenuItem_Serial_ColorMode_BPP24RGB_Click">
+                            <!-- Non-BPP16 modes are kept visible but disabled: receiver
+                                 firmware only decodes 5-6-5 today. Re-enable when
+                                 firmware grows other decoders. -->
+                            <MenuItem Header="24bpp RGB" InputGestureText="True Color" Click="MenuItem_Serial_ColorMode_BPP24RGB_Click" IsEnabled="False">
                                 <MenuItem.Icon>
                                     <Image Source="/Images/Menu/icons8-volume-level-32.png" />
                                 </MenuItem.Icon>
@@ -165,13 +168,13 @@
                                     <Image Source="/Images/Menu/icons8-volume-level-med-32.png" />
                                 </MenuItem.Icon>
                             </MenuItem>
-                            <MenuItem Header="8bpp RGB" InputGestureText="256 Color" Click="MenuItem_Serial_ColorMode_BPP8RGB_Click">
+                            <MenuItem Header="8bpp RGB" InputGestureText="256 Color" Click="MenuItem_Serial_ColorMode_BPP8RGB_Click" IsEnabled="False">
                                 <MenuItem.Icon>
                                     <Image Source="/Images/Menu/icons8-volume-level-low-32.png" />
                                 </MenuItem.Icon>
                             </MenuItem>
-                            <MenuItem Header="8bpp" InputGestureText="Grayscale" Click="MenuItem_Serial_ColorMode_BPP8Gray_Click"/>
-                            <MenuItem Header="1bpp" InputGestureText="Monochrome" Click="MenuItem_Serial_ColorMode_BPP1Mono_Click"/>
+                            <MenuItem Header="8bpp" InputGestureText="Grayscale" Click="MenuItem_Serial_ColorMode_BPP8Gray_Click" IsEnabled="False"/>
+                            <MenuItem Header="1bpp" InputGestureText="Monochrome" Click="MenuItem_Serial_ColorMode_BPP1Mono_Click" IsEnabled="False"/>
                         </MenuItem>
                     </MenuItem>
                     <MenuItem Header="View">

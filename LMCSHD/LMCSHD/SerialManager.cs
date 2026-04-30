@@ -8,7 +8,11 @@ namespace LMCSHD
     public static class SerialManager
     {
         public enum CMode { BPP24RGB, BPP16RGB, BPP8RGB, BPP8Gray, BPP1Mono };
-        public static CMode _colorMode = CMode.BPP24RGB;
+        // Locked to BPP16 for now — the receiver firmware (LED_Wall_Reciever.ino)
+        // only decodes 5-6-5. Edit → Color Mode menu and the serial-connect
+        // dialog disable the other options to make this visible. Re-enable when
+        // receiver firmware grows other decoders.
+        public static CMode _colorMode = CMode.BPP16RGB;
         private static SerialPort _sp = new SerialPort();
         private static bool _serialReady = false;
 

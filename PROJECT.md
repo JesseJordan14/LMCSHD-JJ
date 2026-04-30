@@ -86,15 +86,17 @@ Skip the source ESP entirely. **LMCSHD acts as the WebSocket server**; receivers
 **Substep status:**
 
 - [x] **3.1 — Receiver firmware** points at PC via `secrets.h` (`PC_IP` / `PC_PORT`). LED_Display commit `96ff2b6`.
-- [x] **3.2 — `NetworkManager.cs` (Fleck-backed WS server)** with auto-start in `MainWindow` ctor, `Network → Connect... / Disconnect` menu, and `MatrixNetworkConnection` dialog (port + live device list). `"Who?"` / `"Device N"` handshake, `ReceiverIdentified` / `ReceiverDisconnected` events. **No frame routing yet** — wall stays dark in network mode.
-- [ ] **3.3 — Status display refinement.** Possibly redundant given the dialog; reassess after 3.4.
-- [ ] **3.4 — Per-section frame routing.** Refactor `GetOrderedSerialFrame` to expose per-section byte arrays, push each to the matching receiver in `NetworkManager`. This is when the wall actually lights up over network.
-- [ ] **3.5 — Per-receiver `0x06` ack.** Receiver firmware sends ack after `FastLED.show()`; `NetworkManager.PushFrame` gates next push on all-ready.
-- [ ] **3.6 — Retire source ESP.** Move source firmware to `legacy/`. Mark serial mode as fallback in PROJECT.md.
+- [x] **3.2 — `NetworkManager.cs` (Fleck-backed WS server)** with auto-start in `MainWindow` ctor, `Network → Connect... / Disconnect` menu, and `MatrixNetworkConnection` dialog (port + live device list). `"Who?"` / `"Device N"` handshake, `ReceiverIdentified` / `ReceiverDisconnected` events.
+- ~~**3.3 — Status display refinement.**~~ Skipped; the existing dialog covers it.
+- [x] **3.4 — Per-section frame routing.** `MatrixFrame.GetSectionFrames()` returns per-section RGB888 buffers; `NetworkManager.PushFrame` packs each to BPP16 and sends to the mapped receiver. Section index N → device N+1. Color mode UI is locked to BPP16 (other modes visible-but-disabled in Edit → Color Mode menu and serial-connect dialog) since the receiver firmware only decodes 5-6-5 today. Required a firmware-side `case WStype_BIN` because the legacy text-frame-with-binary-payload hack from the source-ESP path doesn't apply when Fleck sends proper binary frames.
+- [x] **3.5 — Per-receiver `0x06` ack gating.** Receiver firmware sends `webSocket.sendBIN(0x06, 1)` after `FastLED.show()`. `NetworkManager` tracks `_deviceReady` per device and only flushes a frame when every connected device is ready; if a frame fires while waiting, it's marked pending and pushed on the final ack. Effect: panels stay locked together and producer is throttled to slowest receiver. Verified end-to-end on wall.
+- [ ] **3.6 — Retire source ESP.** Move source firmware to `legacy/`. Drop the `WStype_TEXT` BPP16-decode path in receiver firmware (legacy-only). Update PROJECT.md so network mode is the documented happy path and serial is the fallback.
 
-**Gotcha already discovered:** Fleck's `WebSocketServer.Dispose()` only closes the listener socket, not active connections. `NetworkManager.Disconnect()` walks `_devices` + `_pending` and calls `IWebSocketConnection.Close()` on each before disposing the server, then sleeps 100 ms to let close frames flush. Without this, receivers stay in a half-alive WebSocket state across a Disconnect→Connect cycle and only recover on physical replug.
+**Gotchas discovered along the way:**
 
-**Acks (3.5) implementation note:** receiver currently has no ack path; `webSocketEvent` ignores everything except `WStype_TEXT "Who?"`. We'll need to add a one-liner that sends `0x06` after `FastLED.show()`.
+- *Fleck's `WebSocketServer.Dispose()` only closes the listener socket*, not active connections. `NetworkManager.Disconnect()` walks `_devices` + `_pending` and calls `IWebSocketConnection.Close()` on each before disposing the server, then sleeps 100 ms to let close frames flush. Without this, receivers stay in a half-alive WebSocket state across a Disconnect→Connect cycle and only recover on physical replug.
+- *The legacy upstream protocol shipped binary pixel data over WS **text** frames* via the source-ESP firmware's `webSocket.sendTXT(client, (char*)bytes, length)` overload. The receiver was written to decode under `case WStype_TEXT` only. When `NetworkManager` sends proper binary frames via Fleck's `conn.Send(byte[])`, the receiver's switch falls through to `default:` and silently does nothing. Fix was firmware-side: add `case WStype_BIN` and factor the decode into a shared `decodeBPP16AndShow(payload)` helper. Both branches still exist (TEXT for legacy source-ESP, BIN for direct LMCSHD); 3.6 will drop the TEXT branch.
+- *No ack timeout in `NetworkManager`.* If a receiver crashes / loses WiFi mid-frame, its ack never arrives and the PC waits forever. Workaround: `Network → Disconnect / Connect`. Add a watchdog if this turns out to bite in practice.
 
 ## Implementation reference
 
@@ -103,7 +105,7 @@ Skip the source ESP entirely. **LMCSHD acts as the WebSocket server**; receivers
 - `App.xaml.cs` — global structs: `Pixel`, `PixelOrder` (with nested `Orientation`/`StartCorner`/`NewLine` enums), `Section`, `MatrixTitle`.
 - `MatrixFrame.cs` — pixel buffer, dimensions, sections list, `GetOrderedSerialFrame`, `GetChainOrderCoords`, `EmitRegion`/`AppendRegionCoords` (parallel traversal helpers — **keep in sync**), `SaveSections`/`LoadSections`/`SectionsFilePath`, `Brightness`/`Gamma` + `_lut` (consumed only in `EmitRegion`), `SaveDisplayPrefs`/`LoadDisplayPrefs`/`DisplayPrefsFilePath`, `LoadEmbeddedBitmap` (replaces former `Properties.Resources.X` usages so the project builds without `Resources.resx`).
 - `SerialManager.cs` — protocol handling (`0x05`/`0x41`/`0x42`/`0x06`), color mode → opcode mapping, frame transmission. Buffer sizing in non-RGB888 branches uses `Width * Height` rather than `orderedFrame.Length / 3` — fine while sections cover the full matrix; revisit if partial coverage is ever supported.
-- `NetworkManager.cs` — Fleck-backed WebSocket server. `Connect(int port)` / `Disconnect()`, `Devices` map (device# → `IWebSocketConnection`), `ReceiverIdentified` / `ReceiverDisconnected` events. Disconnect must close active connections explicitly (Fleck's `Dispose` doesn't fan out closes — see Feature 3 gotcha).
+- `NetworkManager.cs` — Fleck-backed WebSocket server. `Connect(int port)` / `Disconnect()` / `PushFrame()`, `Devices` map (device# → `IWebSocketConnection`), `ReceiverIdentified` / `ReceiverDisconnected` events. Per-section frame routing (section index N → device N+1), BPP16 packing (5-6-5), per-device `0x06` ack gating with a `_pendingFrame` flag so the most recent state is always shipped on the next all-ready window. Disconnect must close active connections explicitly (Fleck's `Dispose` doesn't fan out closes — see Feature 3 gotchas). Subscribes to `MatrixFrame.FrameChanged` in `Connect`, unsubscribes in `Disconnect`.
 - `MatrixNetworkConnection.xaml` + `.xaml.cs` — port-and-status dialog reachable via `Network → Connect...`. Subscribes to NetworkManager events to show live device list.
 - `MainWindow.xaml` — root UI: menu (`File`, `Serial`, `Edit → Matrix Dimensions / Sections... / Pixel Order / Color Mode`, `View`, `About`) and tabs (Screen Recorder, Audio, Imaging, **Test Patterns**, Drawing/disabled).
 - `MainWindow.xaml.cs` — partial; menu click handlers, MatrixImage events.
@@ -188,12 +190,12 @@ Quick status:
 - Features 1, 2, 4a, 5 are done and verified on the actual wall.
 - Feature 4b (dithering) is deferred — only do it if banding shows up after
   gamma at low brightness.
-- Feature 3 (direct WebSocket from PC) is in progress. Substeps 3.1
-  (receiver firmware points at PC) and 3.2 (LMCSHD WebSocket server with
-  auto-start, Network menu, dialog) are done and verified — receivers
-  connect/disconnect cleanly. Frame routing (3.4), acks (3.5), and source
-  ESP retirement (3.6) are next; the wall stays dark over network mode
-  until 3.4 lands.
+- Feature 3 (direct WebSocket from PC) is mostly done. Substeps 3.1, 3.2,
+  3.4 (per-section frame routing), and 3.5 (per-receiver ack gating with
+  pending-frame flushing) are all verified on the wall. Source ESP can be
+  unplugged and the wall still works over network. Only 3.6 left:
+  formally retiring the source-ESP firmware (move to legacy/, drop the
+  WStype_TEXT BPP16 branch from the receiver, mark serial mode as fallback).
 
 Non-obvious gotchas you must know up front:
 
