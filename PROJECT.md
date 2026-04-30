@@ -6,7 +6,7 @@ Personal fork of [`TechRandom/LMCSHD-TR`](https://github.com/TechRandom/LMCSHD-T
 
 - [x] **Feature 1: Native multi-panel section support** — Section data model + section-aware serial output + dialog UI + persistence; firmware demux removed
 - [x] **Feature 2: Per-section orientation** — covered by Feature 1 (every Section row has its own Orientation/Origin/NewLine)
-- [ ] **Feature 3: Direct WebSocket from PC** — in progress (3.1 firmware + 3.2 server done; 3.3–3.6 remaining)
+- [x] **Feature 3: Direct WebSocket from PC** — LMCSHD is the WS server; receivers connect directly. Source ESP retired to `legacy/`.
 - [x] **Feature 4a: Brightness / gamma controls** — sliders + Reset buttons + LUT in `EmitRegion`, persisted to `display-prefs.dat`; verified on wall
 - [ ] **Feature 4b: Dithering** — deferred; would hook in `SerialManager` color-quantization paths
 - [x] **Feature 5: Built-in test patterns** — solid color / walking pixel / per-section color
@@ -14,28 +14,37 @@ Personal fork of [`TechRandom/LMCSHD-TR`](https://github.com/TechRandom/LMCSHD-T
 ## Hardware target
 
 - 32×32 WS2812B LED wall: **2× 16×32 panels** side-by-side
-- 2× ESP8266 "receiver" boards (one per panel), connected over WebSocket to one ESP8266 "source" board
-- Source ESP talks to LMCSHD on the PC over USB serial @ 921600 baud
+- 2× ESP8266 "receiver" boards (one per panel), each running its own WebSocket client and connecting directly to LMCSHD on the PC
 - Each 16×32 panel is two 16×16 modules chained vertically
-- Network: `10.0.0.x`; source ESP at static `10.0.0.121:81`
-- WiFi credentials live in per-sketch `secrets.h` files (gitignored). Templates in each `secrets.example.h`.
+- Network: `10.0.0.x`; PC at DHCP-reserved `10.0.0.150:81` (LMCSHD WebSocket server)
+- WiFi credentials and `PC_IP` / `PC_PORT` live in per-sketch `secrets.h` files (gitignored). Templates in each `secrets.example.h`.
 
 ## Architecture
 
+**Happy path (Feature 3 done):**
+
 ```
-PC (LMCSHD-JJ)  --USB serial-->  Source ESP  --WebSocket-->  Receiver ESP × N  -->  LEDs
+PC (LMCSHD-JJ, WS server :81)  <--WebSocket-->  Receiver ESP × N  -->  LEDs
 ```
 
-Protocol (one-byte opcodes over serial):
+Receivers boot, connect to WiFi, dial `PC_IP:PC_PORT`. LMCSHD sends `"Who?"` (text) on each new connection; receiver replies `"Device N"` (text) to claim its slot. From then on, frame bytes flow as binary WS frames (`WStype_BIN`), one section per receiver, BPP16 (5-6-5). Receivers ack each frame with a single `0x06` byte (binary); LMCSHD waits for all-receivers-ready before sending the next, keeping panels in lockstep.
+
+**Fallback path (still works):**
+
+```
+PC (LMCSHD-JJ)  --USB serial-->  Source ESP (legacy/)  --WebSocket-->  Receiver ESP × N  -->  LEDs
+```
+
+Source ESP firmware is retained under `Massive-LED-Wall-main/Code/legacy/LED_Wall_Source/` for reference and as a diagnostic fallback if you ever need to bypass the network path. Reflash the source ESP from there, point it at port 81, point the receivers back at the source ESP IP (`10.0.0.121`) by editing each receiver's `secrets.h` `PC_IP`. **Not the documented happy path.**
+
+Serial protocol (one-byte opcodes), used only by the fallback source-ESP path:
 
 | Opcode | Direction | Meaning |
 |--------|-----------|---------|
 | `0x05` | LMCSHD → ESP | "What's your matrix size?" (ESP replies `WIDTH\nHEIGHT\n`) |
 | `0x41` | LMCSHD → ESP | Frame data follows — RGB888 (3 bytes/pixel), single-panel format |
-| `0x42` | LMCSHD → ESP | Frame data follows — RGB565 (2 bytes/pixel); **section-ordered** after Feature 1 |
+| `0x42` | LMCSHD → ESP | Frame data follows — RGB565 (2 bytes/pixel); section-ordered |
 | `0x06` | ESP → LMCSHD | Frame received and displayed (ack) |
-
-Receivers connect to the source ESP's WebSocket server, the source asks `"Who?"` on connect, and each receiver replies `"Device N"` to claim a slot. The source forwards each section's bytes to the matching receiver in list order.
 
 ## What was built
 
@@ -79,24 +88,25 @@ Note: brightness/gamma do *not* currently apply to the matrix preview image, onl
 
 Spatial (Bayer) or temporal dithering at the bit-depth quantization step inside `SerialManager.PushFrame`'s BPP16 / BPP8 branches. Worth doing if banding shows up after gamma at low brightness; not urgent. Separate hook point from 4a (operates on bytes mid-quantization, not on `Frame[]`).
 
-### Feature 3: Direct WebSocket from PC — *in progress*
+### Feature 3: Direct WebSocket from PC — *done*
 
-Skip the source ESP entirely. **LMCSHD acts as the WebSocket server**; receivers stay as WS clients (just point at the PC instead of the source ESP). This kept the firmware change to one line and preserved all the receiver's existing reconnect logic.
+Source ESP retired. LMCSHD is the WebSocket server (`NetworkManager.cs`, Fleck-backed); receivers stay as WS clients and dial the PC. Per-section frame routing with per-receiver ack gating keeps panels in lockstep.
 
-**Substep status:**
+**Substeps:**
 
-- [x] **3.1 — Receiver firmware** points at PC via `secrets.h` (`PC_IP` / `PC_PORT`). LED_Display commit `96ff2b6`.
-- [x] **3.2 — `NetworkManager.cs` (Fleck-backed WS server)** with auto-start in `MainWindow` ctor, `Network → Connect... / Disconnect` menu, and `MatrixNetworkConnection` dialog (port + live device list). `"Who?"` / `"Device N"` handshake, `ReceiverIdentified` / `ReceiverDisconnected` events.
-- ~~**3.3 — Status display refinement.**~~ Skipped; the existing dialog covers it.
-- [x] **3.4 — Per-section frame routing.** `MatrixFrame.GetSectionFrames()` returns per-section RGB888 buffers; `NetworkManager.PushFrame` packs each to BPP16 and sends to the mapped receiver. Section index N → device N+1. Color mode UI is locked to BPP16 (other modes visible-but-disabled in Edit → Color Mode menu and serial-connect dialog) since the receiver firmware only decodes 5-6-5 today. Required a firmware-side `case WStype_BIN` because the legacy text-frame-with-binary-payload hack from the source-ESP path doesn't apply when Fleck sends proper binary frames.
-- [x] **3.5 — Per-receiver `0x06` ack gating.** Receiver firmware sends `webSocket.sendBIN(0x06, 1)` after `FastLED.show()`. `NetworkManager` tracks `_deviceReady` per device and only flushes a frame when every connected device is ready; if a frame fires while waiting, it's marked pending and pushed on the final ack. Effect: panels stay locked together and producer is throttled to slowest receiver. Verified end-to-end on wall.
-- [ ] **3.6 — Retire source ESP.** Move source firmware to `legacy/`. Drop the `WStype_TEXT` BPP16-decode path in receiver firmware (legacy-only). Update PROJECT.md so network mode is the documented happy path and serial is the fallback.
+- [x] **3.1** — Receiver firmware points at PC via `secrets.h` (`PC_IP` / `PC_PORT`). LED_Display `96ff2b6`.
+- [x] **3.2** — `NetworkManager.cs` Fleck-backed WS server with auto-start in `MainWindow` ctor, `Network → Connect... / Disconnect` menu, and `MatrixNetworkConnection` dialog. `"Who?"` / `"Device N"` handshake, `ReceiverIdentified` / `ReceiverDisconnected` events. LMCSHD-JJ `fdb4550`.
+- ~~**3.3**~~ — skipped; the existing dialog covers status display.
+- [x] **3.4** — Per-section frame routing. `MatrixFrame.GetSectionFrames()` returns per-section RGB888 buffers; `NetworkManager.PushFrame` packs each to BPP16 and sends to the mapped receiver. Section index N → device N+1. Color mode UI locked to BPP16 (other modes visible-but-disabled). Firmware-side: `WStype_BIN` handler added because Fleck sends proper binary frames, not the legacy TXT-with-binary-payload hack. LED_Display `7be6f6f`, LMCSHD-JJ `e700ea9`.
+- [x] **3.5** — Per-receiver `0x06` ack gating. Receiver firmware sends `webSocket.sendBIN(0x06, 1)` after `FastLED.show()`. `NetworkManager` tracks `_deviceReady` per device and only flushes when all are ready; pending frames flush on the final ack. Effect: panels stay locked together, producer throttled to slowest receiver. Same commits as 3.4.
+- [x] **3.6** — Source ESP retired to `Massive-LED-Wall-main/Code/legacy/LED_Wall_Source/`. Receiver firmware's `WStype_TEXT` BPP16-decode branch dropped (it was only there for the legacy source-ESP path); TEXT case now exclusively handles the `"Who?"` handshake.
 
-**Gotchas discovered along the way:**
+**Gotchas worth remembering:**
 
 - *Fleck's `WebSocketServer.Dispose()` only closes the listener socket*, not active connections. `NetworkManager.Disconnect()` walks `_devices` + `_pending` and calls `IWebSocketConnection.Close()` on each before disposing the server, then sleeps 100 ms to let close frames flush. Without this, receivers stay in a half-alive WebSocket state across a Disconnect→Connect cycle and only recover on physical replug.
-- *The legacy upstream protocol shipped binary pixel data over WS **text** frames* via the source-ESP firmware's `webSocket.sendTXT(client, (char*)bytes, length)` overload. The receiver was written to decode under `case WStype_TEXT` only. When `NetworkManager` sends proper binary frames via Fleck's `conn.Send(byte[])`, the receiver's switch falls through to `default:` and silently does nothing. Fix was firmware-side: add `case WStype_BIN` and factor the decode into a shared `decodeBPP16AndShow(payload)` helper. Both branches still exist (TEXT for legacy source-ESP, BIN for direct LMCSHD); 3.6 will drop the TEXT branch.
+- *The legacy upstream protocol shipped binary pixel data over WS **text** frames* via the source-ESP firmware's `webSocket.sendTXT(client, (char*)bytes, length)` overload. Receiver was written to decode under `case WStype_TEXT` only. With Fleck sending proper binary, that switch fell through to `default:` and silently did nothing. Receiver now has both a `WStype_BIN` decoder and a TEXT-handshake-only case; the legacy TXT BPP16 branch is gone in 3.6.
 - *No ack timeout in `NetworkManager`.* If a receiver crashes / loses WiFi mid-frame, its ack never arrives and the PC waits forever. Workaround: `Network → Disconnect / Connect`. Add a watchdog if this turns out to bite in practice.
+- *Brightness stacking.* Receiver firmware caps at `MAX_BRIGHTNESS = 200` (out of 255), then `map()`s the 5/6-bit channel values into that range. Now that LMCSHD has its own brightness/gamma slider in software, this 78% firmware cap is doing redundant work. Fine for now; consider raising to 255 (or removing the map) as a follow-up.
 
 ## Implementation reference
 
@@ -115,10 +125,10 @@ Skip the source ESP entirely. **LMCSHD acts as the WebSocket server**; receivers
 
 ### LED_Display files (firmware) (under `Massive-LED-Wall-main/Code/`)
 
-- `LED_Wall_Source/LED_Wall_Source.ino` — source ESP. Reads opcodes from PC, broadcasts per-section bytes to receivers. Demux loop removed in `commit 95c38a8`.
-- `LED_Wall_Reciever/LED_Wall_Reciever.ino` — receiver ESP. WebSocket client. `#define DEVICE_NUM 1` (or 2) selects which slot this board claims — re-flash per board.
-- `Single_LED_Wall_*` — earlier single-panel sketches kept for reference.
-- `*/secrets.h` — WiFi credentials, **gitignored**. `*/secrets.example.h` is the committed template.
+- `LED_Wall_Reciever/LED_Wall_Reciever.ino` — receiver ESP. WebSocket client; dials `PC_IP:PC_PORT` from `secrets.h`. `#define DEVICE_NUM 1` (or 2) per board selects which slot it claims. Pixel frames arrive as `WStype_BIN`, decoded by `decodeBPP16AndShow` which acks with a single `0x06` byte after `FastLED.show()`. Text frames are handshake-only (`"Who?"` → `"Device N"`).
+- `legacy/LED_Wall_Source/LED_Wall_Source.ino` — retired source ESP. Kept for diagnostic fallback only; LMCSHD-JJ's `NetworkManager` replaces this device on the happy path.
+- `Single_LED_Wall_*` — earlier single-panel sketches kept for reference. Not on the current happy path.
+- `*/secrets.h` — WiFi credentials and (for receivers) `PC_IP` / `PC_PORT`, **gitignored**. `*/secrets.example.h` is the committed template.
 
 ### Scaffolding to remove eventually
 
@@ -141,17 +151,25 @@ If you try `dotnet build` you'll see either MSB3822/MSB3823 resource errors or W
 ## Test loop
 
 1. Edit code (LMCSHD-JJ for desktop, LED_Display for firmware).
-2. Build LMCSHD with VS MSBuild. Re-flash source ESP via Arduino IDE if firmware changed.
-3. Run `LMCSHD\LMCSHD\bin\x64\Debug\LMCSHD.exe`.
-4. `Serial → Connect`: source ESP's COM port, baud `921600`, color mode **BPP16RGB** (sends `0x42`).
-5. Matrix dimensions auto-detect to 32×32. Sections auto-load from save file or fall back to scaffolding.
-6. Use the various tabs (Screen Recorder / Imaging / Test Patterns) to push content. Verify on the wall.
+2. Build LMCSHD with VS MSBuild. Re-flash receivers via Arduino IDE if firmware changed.
+3. Power the receivers on. They auto-dial `PC_IP:PC_PORT` from their `secrets.h` and retry every 5s if the server isn't up yet.
+4. Run `LMCSHD\LMCSHD\bin\x64\Debug\LMCSHD.exe`. The WebSocket server auto-starts on port 81. Within ~5s both receivers should connect.
+5. Open `Network → Connect...` to confirm `Device 1` and `Device 2` are listed.
+6. Matrix dimensions are 32×32 (set in `MatrixFrame.Width`/`Height`). Sections auto-load from save file or fall back to the test scaffolding.
+7. Use any source tab (Screen Recorder / Imaging / Test Patterns) to push content. Verify on the wall — panels stay synced, framerate matches the slowest receiver.
+
+Fallback (serial via legacy source ESP, if you ever need it):
+
+1. Reflash source ESP from `legacy/LED_Wall_Source/`.
+2. Reflash receivers with `secrets.h` `PC_IP` pointing at the source ESP's static `10.0.0.121`.
+3. `Serial → Connect` in LMCSHD: source ESP's COM port, baud `921600`, color mode `16bpp RGB`.
 
 Common diagnostic moves:
 
 - Wall scrambled → `Test Patterns → Per-Section ID` to confirm the section-to-panel mapping is right.
-- Halves swapped → don't touch LMCSHD; re-flash one receiver with `DEVICE_NUM` swapped (1↔2).
+- Halves swapped → swap the two rows in the Sections dialog (no firmware reflash needed); or re-flash one receiver with `DEVICE_NUM` swapped (1↔2).
 - One section's orientation off → Sections dialog → flip its Origin/NewLine for that row.
+- Wall freezes with one panel still alive → that receiver crashed or lost WiFi and never sent its `0x06` ack. `Network → Disconnect / Connect` resets state.
 
 ## Open questions
 
@@ -187,36 +205,44 @@ It covers: hardware, architecture, protocol, what's been built (with code
 pointers), what's left, build instructions, test loop, and known scaffolding.
 
 Quick status:
-- Features 1, 2, 4a, 5 are done and verified on the actual wall.
-- Feature 4b (dithering) is deferred — only do it if banding shows up after
-  gamma at low brightness.
-- Feature 3 (direct WebSocket from PC) is mostly done. Substeps 3.1, 3.2,
-  3.4 (per-section frame routing), and 3.5 (per-receiver ack gating with
-  pending-frame flushing) are all verified on the wall. Source ESP can be
-  unplugged and the wall still works over network. Only 3.6 left:
-  formally retiring the source-ESP firmware (move to legacy/, drop the
-  WStype_TEXT BPP16 branch from the receiver, mark serial mode as fallback).
+- All planned features are done. Features 1, 2, 3, 4a, 5 verified on the
+  actual wall. Source ESP retired to legacy/; LMCSHD is now the WebSocket
+  server and receivers connect directly.
+- Feature 4b (dithering) is deferred — only do it if banding shows up
+  after gamma at low brightness.
+- Open follow-ups noted in PROJECT.md: receiver firmware MAX_BRIGHTNESS
+  cap is now redundant given software brightness; csproj migration to
+  SDK-style; persistence scope for global orientation/color mode/COM port.
 
 Non-obvious gotchas you must know up front:
 
 - Build LMCSHD-JJ with Visual Studio's MSBuild (path in PROJECT.md), NOT
   `dotnet build`. The latter fails on this old-style .NET Framework 4.7.2 WPF
   project regardless of SDK version. Output is bin\x64\Debug\LMCSHD.exe.
-- WiFi credentials live in gitignored secrets.h files in each Arduino sketch
-  folder. Templates are in secrets.example.h. Never commit real creds.
-- Source ESP is at static IP 10.0.0.121 on a 10.0.0.x network.
+- WiFi credentials and PC_IP/PC_PORT live in gitignored secrets.h files in
+  each Arduino sketch folder. Templates are in secrets.example.h. Never
+  commit real creds.
+- The PC has a DHCP-reserved IP at 10.0.0.150 on the 10.0.0.x network;
+  receivers dial that. Source ESP is retired to
+  Massive-LED-Wall-main/Code/legacy/LED_Wall_Source/ and is no longer used
+  on the happy path.
+- LMCSHD's color mode menu and the serial-connect dialog show non-BPP16
+  options as visible-but-disabled — receiver firmware only decodes 5-6-5
+  today. Don't re-enable them without firmware support.
 - There's intentional scaffolding in MatrixFrame.UseTestSectionsOn32x32 that
   PROJECT.md flags for eventual removal — don't reflexively "clean it up."
-- `MatrixFrame.GetOrderedSerialFrame` / `EmitRegion` and `GetChainOrderCoords`
-  / `AppendRegionCoords` share traversal logic in parallel helpers. If you
-  change one, change the other.
+- `MatrixFrame.EmitRegion` is the single source of truth for per-pixel
+  serpentine ordering and the brightness/gamma LUT; `AppendRegionCoords`
+  and `GetSectionFrames` parallel its traversal. If you change one, check
+  the others.
 
 What I want to do now:
 
-Start Feature 4. Read PROJECT.md, glance at MatrixFrame.cs and
-SerialManager.cs to confirm the current pipeline, then propose a plan: where
-the brightness / gamma transform should hook in, what UI (controls + where
-they live), what persistence (if any), and the test plan. Don't write code
-yet — get my agreement on the approach first. Keep the proposal focused on
-Feature 4. Don't pre-plan Feature 3.
+[REPLACE THIS WITH THE TASK FOR THIS SESSION before pasting. The original
+roadmap (Features 1, 2, 3, 4a, 5) is done. Likely follow-ups: removing the
+firmware MAX_BRIGHTNESS=200 cap now that LMCSHD has software brightness;
+cleaning up MatrixFrame.UseTestSectionsOn32x32 scaffolding once persistence
+has been used; persisting global orientation / color mode / COM port;
+csproj migration to SDK-style. Or Feature 4b (dithering) if banding shows
+up at low brightness.]
 ```
