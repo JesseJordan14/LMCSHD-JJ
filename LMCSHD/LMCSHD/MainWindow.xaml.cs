@@ -35,6 +35,10 @@ namespace LMCSHD
             InitializeAudioCaptureUI();
             MatrixFrame.BitmapToFrame(MatrixFrame.LoadEmbeddedBitmap("pack://application:,,,/Images/Icon16.png"), System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor);
             //FrameToPreview();
+
+            // Auto-start the WebSocket server on launch so receivers can dial in
+            // immediately. User can stop/restart via Network → Disconnect / Connect...
+            NetworkManager.Connect(NetworkManager.DefaultPort);
         }
         private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e)
         {
@@ -42,6 +46,7 @@ namespace LMCSHD
             EndAllThreads();
             SerialManager.Disconnect();
             while (SerialManager.IsConnected()) SerialManager.Disconnect();
+            NetworkManager.Disconnect();
         }
 
         private void BrightnessSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -182,6 +187,19 @@ namespace LMCSHD
         private void MenuItem_Serial_Disconnect_Click(object sender, RoutedEventArgs e)
         {
             SerialManager.Disconnect();
+        }
+        private void MenuItem_Network_Connect_Click(object sender, RoutedEventArgs e)
+        {
+            MatrixNetworkConnection mn = new MatrixNetworkConnection
+            {
+                Owner = this,
+                WindowStartupLocation = System.Windows.WindowStartupLocation.CenterOwner
+            };
+            mn.ShowDialog();
+        }
+        private void MenuItem_Network_Disconnect_Click(object sender, RoutedEventArgs e)
+        {
+            NetworkManager.Disconnect();
         }
 
         #region Menu_Serial

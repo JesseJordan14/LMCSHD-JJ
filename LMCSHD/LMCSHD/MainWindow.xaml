@@ -80,6 +80,10 @@
                             </MenuItem.Icon>
                         </MenuItem>
                     </MenuItem>
+                    <MenuItem Header="_Network">
+                        <MenuItem Header="Connect..." Click="MenuItem_Network_Connect_Click"/>
+                        <MenuItem Header="Disconnect" Click="MenuItem_Network_Disconnect_Click"/>
+                    </MenuItem>
                     <MenuItem Header="Edit">
                         <MenuItem Header="Matrix Dimensions" Click="MenuItem_Edit_MatrixDimensions_Click">
                             <MenuItem.Icon>

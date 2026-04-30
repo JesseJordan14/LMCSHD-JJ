@@ -6,8 +6,8 @@ Personal fork of [`TechRandom/LMCSHD-TR`](https://github.com/TechRandom/LMCSHD-T
 
 - [x] **Feature 1: Native multi-panel section support** — Section data model + section-aware serial output + dialog UI + persistence; firmware demux removed
 - [x] **Feature 2: Per-section orientation** — covered by Feature 1 (every Section row has its own Orientation/Origin/NewLine)
-- [ ] **Feature 3: Direct WebSocket from PC** — large architectural change, save for last
-- [x] **Feature 4a: Brightness / gamma controls** — sliders + LUT in `EmitRegion`, persisted to `display-prefs.dat`
+- [ ] **Feature 3: Direct WebSocket from PC** — in progress (3.1 firmware + 3.2 server done; 3.3–3.6 remaining)
+- [x] **Feature 4a: Brightness / gamma controls** — sliders + Reset buttons + LUT in `EmitRegion`, persisted to `display-prefs.dat`; verified on wall
 - [ ] **Feature 4b: Dithering** — deferred; would hook in `SerialManager` color-quantization paths
 - [x] **Feature 5: Built-in test patterns** — solid color / walking pixel / per-section color
 
@@ -69,7 +69,7 @@ Walking pixel uses `MatrixFrame.GetChainOrderCoords()`, which mirrors `GetOrdere
 
 `MatrixFrame.Brightness` (0..1) and `MatrixFrame.Gamma` (0.1..5) drive a 256-entry `byte[] _lut` (formula: `out = round(255 * pow((in/255) * brightness, gamma))`). Setters clamp and rebuild the LUT. `EmitRegion` reads through `_lut` for every R/G/B byte it emits — single hook point covers no-sections and sectioned paths, HZ and VT branches. `AppendRegionCoords` is unchanged because it doesn't touch color data; the "keep parallel helpers in sync" rule didn't apply here.
 
-UI: a strip below the tab/preview area in `MainWindow.xaml` (Grid row 2, `ColumnSpan=3`), always visible across tabs. Two `<Slider>`s — Brightness 0–100%, Gamma 0.5–3.0 — with value labels. `ValueChanged` writes through to `MatrixFrame` and calls `Refresh()` so static frames update immediately.
+UI: a strip below the tab/preview area in `MainWindow.xaml` (Grid row 2, `ColumnSpan=3`), always visible across tabs. Two `<Slider>`s — Brightness 0–100%, Gamma 0.5–3.0 — with value labels and Reset buttons (defaults exposed as `MatrixFrame.BrightnessDefault` / `GammaDefault` constants). `ValueChanged` writes through to `MatrixFrame` and calls `Refresh()` so static frames update immediately.
 
 Persistence: `%LOCALAPPDATA%\LMCSHD-JJ\display-prefs.dat`, key=value lines (`brightness 0.7` / `gamma 2.2`), invariant culture. Loaded right after `InitializeComponent` and slider values re-synced from the loaded values; saved in `Window_Closing`. Defaults are 1.0/1.0 (no-op) so first launch matches pre-Feature-4 behavior.
 
@@ -79,15 +79,22 @@ Note: brightness/gamma do *not* currently apply to the matrix preview image, onl
 
 Spatial (Bayer) or temporal dithering at the bit-depth quantization step inside `SerialManager.PushFrame`'s BPP16 / BPP8 branches. Worth doing if banding shows up after gamma at low brightness; not urgent. Separate hook point from 4a (operates on bytes mid-quantization, not on `Frame[]`).
 
-### Feature 3: Direct WebSocket from PC — *largest architectural change*
+### Feature 3: Direct WebSocket from PC — *in progress*
 
-Skip the source ESP entirely. LMCSHD opens a WebSocket connection per receiver and pushes frames directly.
+Skip the source ESP entirely. **LMCSHD acts as the WebSocket server**; receivers stay as WS clients (just point at the PC instead of the source ESP). This kept the firmware change to one line and preserved all the receiver's existing reconnect logic.
 
-**Wins:** higher framerate, no USB tether, one less device to power and configure.
+**Substep status:**
 
-**Costs:** C# WebSocket client (NuGet package), receiver IP discovery/config UI, receiver firmware must implement `"Who?"` handshake from PC instead of source ESP.
+- [x] **3.1 — Receiver firmware** points at PC via `secrets.h` (`PC_IP` / `PC_PORT`). LED_Display commit `96ff2b6`.
+- [x] **3.2 — `NetworkManager.cs` (Fleck-backed WS server)** with auto-start in `MainWindow` ctor, `Network → Connect... / Disconnect` menu, and `MatrixNetworkConnection` dialog (port + live device list). `"Who?"` / `"Device N"` handshake, `ReceiverIdentified` / `ReceiverDisconnected` events. **No frame routing yet** — wall stays dark in network mode.
+- [ ] **3.3 — Status display refinement.** Possibly redundant given the dialog; reassess after 3.4.
+- [ ] **3.4 — Per-section frame routing.** Refactor `GetOrderedSerialFrame` to expose per-section byte arrays, push each to the matching receiver in `NetworkManager`. This is when the wall actually lights up over network.
+- [ ] **3.5 — Per-receiver `0x06` ack.** Receiver firmware sends ack after `FastLED.show()`; `NetworkManager.PushFrame` gates next push on all-ready.
+- [ ] **3.6 — Retire source ESP.** Move source firmware to `legacy/`. Mark serial mode as fallback in PROJECT.md.
 
-**Status:** save for a focused effort of its own. Do not start until Feature 4 is shipped.
+**Gotcha already discovered:** Fleck's `WebSocketServer.Dispose()` only closes the listener socket, not active connections. `NetworkManager.Disconnect()` walks `_devices` + `_pending` and calls `IWebSocketConnection.Close()` on each before disposing the server, then sleeps 100 ms to let close frames flush. Without this, receivers stay in a half-alive WebSocket state across a Disconnect→Connect cycle and only recover on physical replug.
+
+**Acks (3.5) implementation note:** receiver currently has no ack path; `webSocketEvent` ignores everything except `WStype_TEXT "Who?"`. We'll need to add a one-liner that sends `0x06` after `FastLED.show()`.
 
 ## Implementation reference
 
@@ -96,6 +103,8 @@ Skip the source ESP entirely. LMCSHD opens a WebSocket connection per receiver a
 - `App.xaml.cs` — global structs: `Pixel`, `PixelOrder` (with nested `Orientation`/`StartCorner`/`NewLine` enums), `Section`, `MatrixTitle`.
 - `MatrixFrame.cs` — pixel buffer, dimensions, sections list, `GetOrderedSerialFrame`, `GetChainOrderCoords`, `EmitRegion`/`AppendRegionCoords` (parallel traversal helpers — **keep in sync**), `SaveSections`/`LoadSections`/`SectionsFilePath`, `Brightness`/`Gamma` + `_lut` (consumed only in `EmitRegion`), `SaveDisplayPrefs`/`LoadDisplayPrefs`/`DisplayPrefsFilePath`, `LoadEmbeddedBitmap` (replaces former `Properties.Resources.X` usages so the project builds without `Resources.resx`).
 - `SerialManager.cs` — protocol handling (`0x05`/`0x41`/`0x42`/`0x06`), color mode → opcode mapping, frame transmission. Buffer sizing in non-RGB888 branches uses `Width * Height` rather than `orderedFrame.Length / 3` — fine while sections cover the full matrix; revisit if partial coverage is ever supported.
+- `NetworkManager.cs` — Fleck-backed WebSocket server. `Connect(int port)` / `Disconnect()`, `Devices` map (device# → `IWebSocketConnection`), `ReceiverIdentified` / `ReceiverDisconnected` events. Disconnect must close active connections explicitly (Fleck's `Dispose` doesn't fan out closes — see Feature 3 gotcha).
+- `MatrixNetworkConnection.xaml` + `.xaml.cs` — port-and-status dialog reachable via `Network → Connect...`. Subscribes to NetworkManager events to show live device list.
 - `MainWindow.xaml` — root UI: menu (`File`, `Serial`, `Edit → Matrix Dimensions / Sections... / Pixel Order / Color Mode`, `View`, `About`) and tabs (Screen Recorder, Audio, Imaging, **Test Patterns**, Drawing/disabled).
 - `MainWindow.xaml.cs` — partial; menu click handlers, MatrixImage events.
 - `MainWindow{Audio,Imaging,ScreenCapture,TestPatterns}.cs` — partials; mode-specific state and handlers.
@@ -176,13 +185,15 @@ It covers: hardware, architecture, protocol, what's been built (with code
 pointers), what's left, build instructions, test loop, and known scaffolding.
 
 Quick status:
-- Features 1, 2, 4a, 5 are done. Features 1, 2, 5 are verified on the actual
-  wall; Feature 4a (brightness/gamma) builds clean but still needs on-wall
-  verification.
+- Features 1, 2, 4a, 5 are done and verified on the actual wall.
 - Feature 4b (dithering) is deferred — only do it if banding shows up after
   gamma at low brightness.
-- Feature 3 (direct WebSocket from PC, killing the source ESP) is the last
-  feature.
+- Feature 3 (direct WebSocket from PC) is in progress. Substeps 3.1
+  (receiver firmware points at PC) and 3.2 (LMCSHD WebSocket server with
+  auto-start, Network menu, dialog) are done and verified — receivers
+  connect/disconnect cleanly. Frame routing (3.4), acks (3.5), and source
+  ESP retirement (3.6) are next; the wall stays dark over network mode
+  until 3.4 lands.
 
 Non-obvious gotchas you must know up front:
 

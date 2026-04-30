@@ -109,6 +109,9 @@
     <SignAssembly>false</SignAssembly>
   </PropertyGroup>
   <ItemGroup>
+    <Reference Include="Fleck, Version=1.2.0.0, Culture=neutral, processorArchitecture=MSIL">
+      <HintPath>..\packages\Fleck.1.2.0\lib\net45\Fleck.dll</HintPath>
+    </Reference>
     <Reference Include="NAudio, Version=1.10.0.0, Culture=neutral, processorArchitecture=MSIL">
       <HintPath>..\packages\NAudio.1.10.0\lib\net35\NAudio.dll</HintPath>
     </Reference>
@@ -163,6 +166,7 @@
       <DependentUpon>MatrixConnection.xaml</DependentUpon>
     </Compile>
     <Compile Include="ScreenRecorder.cs" />
+    <Compile Include="NetworkManager.cs" />
     <Compile Include="SerialManager.cs" />
     <Compile Include="ExportWindow.xaml.cs">
       <DependentUpon>ExportWindow.xaml</DependentUpon>
@@ -172,6 +176,9 @@
     </Compile>
     <Compile Include="MatrixSections.xaml.cs">
       <DependentUpon>MatrixSections.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="MatrixNetworkConnection.xaml.cs">
+      <DependentUpon>MatrixNetworkConnection.xaml</DependentUpon>
     </Compile>
     <Page Include="MainWindow.xaml">
       <Generator>MSBuild:Compile</Generator>
@@ -186,6 +193,10 @@
       <SubType>Code</SubType>
     </Compile>
     <Page Include="MatrixConnection.xaml">
+      <SubType>Designer</SubType>
+      <Generator>MSBuild:Compile</Generator>
+    </Page>
+    <Page Include="MatrixNetworkConnection.xaml">
       <SubType>Designer</SubType>
       <Generator>MSBuild:Compile</Generator>
     </Page>

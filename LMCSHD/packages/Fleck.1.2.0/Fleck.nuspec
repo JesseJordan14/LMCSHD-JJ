@@ -1,0 +1,23 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2012/06/nuspec.xsd">
+  <metadata>
+    <id>Fleck</id>
+    <version>1.2.0</version>
+    <title>Fleck</title>
+    <authors>statenjason</authors>
+    <owners>statenjason</owners>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <licenseUrl>https://github.com/statianzo/Fleck/blob/master/LICENSE</licenseUrl>
+    <projectUrl>https://github.com/statianzo/Fleck</projectUrl>
+    <description>C# WebSocket Implementation</description>
+    <copyright>Copyright Jason Staten 2010-2018. All rights reserved.</copyright>
+    <tags>websockets server html5 events</tags>
+    <repository url="https://github.com/statianzo/Fleck" />
+    <dependencies>
+      <group targetFramework=".NETFramework4.0" />
+      <group targetFramework=".NETFramework4.5" />
+      <group targetFramework=".NETCoreApp2.0" />
+      <group targetFramework=".NETStandard2.0" />
+    </dependencies>
+  </metadata>
+</package>
