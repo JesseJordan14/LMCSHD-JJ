@@ -167,7 +167,9 @@
     </Compile>
     <Compile Include="ScreenRecorder.cs" />
     <Compile Include="NetworkManager.cs" />
+    <Compile Include="PowerStateController.cs" />
     <Compile Include="SerialManager.cs" />
+    <Compile Include="TrayController.cs" />
     <Compile Include="ExportWindow.xaml.cs">
       <DependentUpon>ExportWindow.xaml</DependentUpon>
     </Compile>

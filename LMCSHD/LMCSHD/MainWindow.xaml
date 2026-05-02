@@ -13,6 +13,7 @@
         Width="1348"
         MinWidth="512"
         Closing="Window_Closing"
+        StateChanged="Window_StateChanged"
         SizeToContent="Width">
 
 
@@ -637,6 +638,13 @@
 
             <Border Grid.Row="2" Grid.ColumnSpan="3" Margin="2,4,2,2" BorderBrush="Gray" BorderThickness="0,1,0,0">
                 <StackPanel Orientation="Horizontal" Margin="6,4,6,4">
+                    <Button x:Name="WallToggleBtn"
+                            Content="Wall: On"
+                            Width="80"
+                            Margin="2,2,16,2"
+                            Click="WallToggleBtn_Click"
+                            ToolTip="Toggle the LED wall on/off without disconnecting receivers"/>
+
                     <TextBlock Text="Brightness" VerticalAlignment="Center" Margin="2"/>
                     <Slider x:Name="BrightnessSlider"
                             Width="220"

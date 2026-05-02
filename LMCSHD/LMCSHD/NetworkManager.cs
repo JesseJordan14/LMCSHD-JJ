@@ -25,6 +25,13 @@ namespace LMCSHD
         private static readonly ConcurrentDictionary<int, IWebSocketConnection> _devices =
             new ConcurrentDictionary<int, IWebSocketConnection>();
 
+        // Feature 6.9: panel pixel dimensions reported by each device in its
+        // identification reply ("Device N WxH"). Used to compute total wall
+        // dimensions when a receiver identifies, so MatrixFrame.SetDimensions
+        // can be called automatically. Tuple.Item1 = width, Item2 = height.
+        private static readonly ConcurrentDictionary<int, Tuple<int, int>> _devicePanelDims =
+            new ConcurrentDictionary<int, Tuple<int, int>>();
+
         // Per-device "ready for next frame" gate. True after a 0x06 ack arrives
         // (or right after identification, before any frame has been pushed).
         // Cleared per-device when we send that device a frame; set by ack.
@@ -37,6 +44,24 @@ namespace LMCSHD
         private static volatile bool _pendingFrame = false;
         private static readonly object _flushLock = new object();
 
+        // Lifecycle gate (Feature 6.2). When false, DoPushFrame ships zeroed
+        // bytes per section — wall goes blank regardless of what
+        // MatrixFrame.Frame contains. Source events keep firing normally;
+        // they just get force-zeroed at send time. Toggled by
+        // PowerStateController on lock / sleep / unlock / wake events.
+        private static volatile bool _isActive = true;
+        public static bool IsActive { get { return _isActive; } }
+
+        /* Feature 6.8 v2 (abandoned 2026-05-01) — keepalive timer companion
+         * to the receiver-side app-level watchdog. Pushed the current frame
+         * state every 1s so receivers had a steady stream of messages to
+         * watchdog against. Worked for LMCSHD-crash detection but didn't
+         * solve the original hibernate motivation, so abandoned.
+         *
+         * private static System.Threading.Timer _keepaliveTimer;
+         * private const int KeepaliveIntervalMs = 1000;
+         */
+
         // Events fire on Fleck's worker threads — subscribers must marshal to
         // the UI dispatcher themselves (same pattern as SerialManager).
         public delegate void ReceiverIdentifiedHandler(int deviceNum);
@@ -44,6 +69,11 @@ namespace LMCSHD
 
         public delegate void ReceiverDisconnectedHandler(int deviceNum);
         public static event ReceiverDisconnectedHandler ReceiverDisconnected;
+
+        // Fires whenever IsActive changes (lock/unlock, sleep/wake, manual
+        // toggle). Subscribers can sync UI state without polling.
+        public delegate void ActiveStateChangedHandler(bool isActive);
+        public static event ActiveStateChangedHandler ActiveStateChanged;
 
         public const int DefaultPort = 81;
         public static int ListenPort { get; private set; } = DefaultPort;
@@ -72,6 +102,12 @@ namespace LMCSHD
 
                 MatrixFrame.FrameChanged -= OnFrameChanged;
                 MatrixFrame.FrameChanged += OnFrameChanged;
+
+                /* Feature 6.8 v2 (abandoned 2026-05-01).
+                 * _keepaliveTimer?.Dispose();
+                 * _keepaliveTimer = new System.Threading.Timer(
+                 *     _ => PushFrame(), null, KeepaliveIntervalMs, KeepaliveIntervalMs);
+                 */
                 return true;
             }
             catch (SocketException)
@@ -83,7 +119,33 @@ namespace LMCSHD
 
         public static void Disconnect()
         {
+            // Unsubscribe first so no in-flight FrameChanged from a live
+            // source races our cleanup blank push below.
             MatrixFrame.FrameChanged -= OnFrameChanged;
+
+            /* Feature 6.8 v2 (abandoned 2026-05-01).
+             * _keepaliveTimer?.Dispose();
+             * _keepaliveTimer = null;
+             */
+
+            // Feature 6.3: push a blank frame to every connected device
+            // before tearing down. The firmware-side blank-on-disconnect
+            // (6.1) blanks the wall when receivers see the close frame
+            // anyway, but pushing black explicitly here makes the
+            // transition feel instant rather than waiting on the close-
+            // frame round-trip + receiver render. Best-effort: no ack
+            // waiting (we're tearing down anyway). _isActive is left alone
+            // — that flag belongs to PowerStateController, not Disconnect.
+            var sectionFrames = MatrixFrame.GetSectionFrames();
+            for (int i = 0; i < sectionFrames.Count; i++)
+            {
+                int deviceNum = i + 1;
+                IWebSocketConnection conn;
+                if (!_devices.TryGetValue(deviceNum, out conn)) continue;
+                int bppByteLen = (sectionFrames[i].Length / 3) * 2; // RGB888 → BPP16
+                byte[] blank = new byte[bppByteLen];
+                try { conn.Send(blank); } catch { }
+            }
 
             // Fleck's WebSocketServer.Dispose() closes only the listener socket
             // — established client connections are NOT torn down. If we don't
@@ -110,6 +172,7 @@ namespace LMCSHD
             var nums = new List<int>(_devices.Keys);
             _devices.Clear();
             _deviceReady.Clear();
+            _devicePanelDims.Clear();
             _pendingFrame = false;
             foreach (var n in nums) ReceiverDisconnected?.Invoke(n);
         }
@@ -135,6 +198,8 @@ namespace LMCSHD
                 _devices.TryRemove(identifiedNum.Value, out _);
                 bool _b;
                 _deviceReady.TryRemove(identifiedNum.Value, out _b);
+                Tuple<int, int> _d;
+                _devicePanelDims.TryRemove(identifiedNum.Value, out _d);
                 ReceiverDisconnected?.Invoke(identifiedNum.Value);
 
                 // The departing device may have been the last holdout for a
@@ -146,10 +211,30 @@ namespace LMCSHD
 
         private static void OnTextMessage(IWebSocketConnection socket, string msg)
         {
-            // Only message we expect right now: "Device N" in reply to "Who?".
+            // Identification reply formats:
+            //   "Device N"         (legacy / dimensions unreported)
+            //   "Device N WxH"     (Feature 6.9 — receiver also reports its
+            //                       panel pixel dimensions for auto-sizing)
+            // Anything else is ignored (text frames are exclusively handshake
+            // messages now; pixel data flows via WStype_BIN).
             if (msg == null || !msg.StartsWith("Device ")) return;
+            var parts = msg.Substring(7).Trim().Split(' ');
+            if (parts.Length < 1) return;
             int deviceNum;
-            if (!int.TryParse(msg.Substring(7).Trim(), out deviceNum)) return;
+            if (!int.TryParse(parts[0], out deviceNum)) return;
+
+            // Optional dimensions field: "WxH". Forward-compatible — absence
+            // (parts.Length < 2) just skips the auto-SetDimensions side-effect.
+            int panelW = 0, panelH = 0;
+            if (parts.Length >= 2)
+            {
+                var dims = parts[1].Split('x');
+                if (dims.Length == 2)
+                {
+                    int.TryParse(dims[0], out panelW);
+                    int.TryParse(dims[1], out panelH);
+                }
+            }
 
             // If another connection already claimed this slot, kick it. The most
             // recent claimant wins so reflashed/restarted boards reclaim cleanly.
@@ -165,6 +250,39 @@ namespace LMCSHD
             _deviceReady[deviceNum] = true;
             lock (_pendingLock) { _pending.Remove(socket); }
             ReceiverIdentified?.Invoke(deviceNum);
+
+            if (panelW > 0 && panelH > 0)
+            {
+                _devicePanelDims[deviceNum] = Tuple.Create(panelW, panelH);
+                UpdateMatrixDimensionsFromReports();
+            }
+        }
+
+        // Feature 6.9: aggregate reported panel dimensions into a total wall
+        // size and call MatrixFrame.SetDimensions if the result differs from
+        // the current dims. Default layout assumption: side-by-side, so total
+        // Width = Σ panelWidths, Height = max(panelHeights). Layout itself
+        // stays under user control via the Sections dialog — only the total
+        // dimensions get auto-set from receiver reports. SetDimensions
+        // mutates static state and fires events that subscribers expect on
+        // the UI thread, so we marshal via Application.Current.Dispatcher.
+        private static void UpdateMatrixDimensionsFromReports()
+        {
+            int totalW = 0;
+            int maxH = 0;
+            foreach (var kv in _devicePanelDims)
+            {
+                totalW += kv.Value.Item1;
+                if (kv.Value.Item2 > maxH) maxH = kv.Value.Item2;
+            }
+            if (totalW <= 0 || maxH <= 0) return;
+            if (totalW == MatrixFrame.Width && maxH == MatrixFrame.Height) return;
+
+            var app = System.Windows.Application.Current;
+            if (app != null)
+                app.Dispatcher.Invoke(() => MatrixFrame.SetDimensions(totalW, maxH));
+            else
+                MatrixFrame.SetDimensions(totalW, maxH);
         }
 
         // Receivers send a single 0x06 byte (binary frame) after FastLED.show()
@@ -227,6 +345,26 @@ namespace LMCSHD
             }
         }
 
+        // Lifecycle gate. If `active` flips, force a push so the new state
+        // (current content vs. blank) takes effect immediately rather than
+        // waiting for the next FrameChanged from the source. Notify
+        // subscribers (e.g. the Wall toggle button label) of the change
+        // outside the lock to avoid reentrancy.
+        public static void SetActive(bool active)
+        {
+            bool changed;
+            lock (_flushLock)
+            {
+                changed = (_isActive != active);
+                _isActive = active;
+            }
+            if (changed)
+            {
+                PushFrame();
+                ActiveStateChanged?.Invoke(active);
+            }
+        }
+
         private static void TryFlushPending()
         {
             lock (_flushLock)
@@ -261,7 +399,12 @@ namespace LMCSHD
                 IWebSocketConnection conn;
                 if (!_devices.TryGetValue(deviceNum, out conn)) continue;
 
-                byte[] bpp16 = PackBPP16(sectionFrames[i]);
+                // When inactive, send zeroed bytes the same shape as the section
+                // would have produced. PackBPP16 of all zeros = all zeros = blank.
+                byte[] rgb = _isActive
+                    ? sectionFrames[i]
+                    : new byte[sectionFrames[i].Length];
+                byte[] bpp16 = PackBPP16(rgb);
                 try
                 {
                     conn.Send(bpp16);

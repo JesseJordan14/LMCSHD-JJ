@@ -10,6 +10,8 @@ Personal fork of [`TechRandom/LMCSHD-TR`](https://github.com/TechRandom/LMCSHD-T
 - [x] **Feature 4a: Brightness / gamma controls** — sliders + Reset buttons + LUT in `EmitRegion`, persisted to `display-prefs.dat`; verified on wall
 - [ ] **Feature 4b: Dithering** — deferred; would hook in `SerialManager` color-quantization paths
 - [x] **Feature 5: Built-in test patterns** — solid color / walking pixel / per-section color
+- [ ] **Feature 6: Auto-on/off lifecycle + custom startup content** — wall mirrors PC awake/asleep state (except hibernate, see 6.8), shows configurable content when active
+- [ ] **Feature 7: OTA receiver firmware updates** — flash the receiver ESPs over WiFi via Arduino IDE instead of unplugging from the LEDs every time
 
 ## Hardware target
 
@@ -87,6 +89,97 @@ Note: brightness/gamma do *not* currently apply to the matrix preview image, onl
 ### Feature 4b: Dithering — *deferred*
 
 Spatial (Bayer) or temporal dithering at the bit-depth quantization step inside `SerialManager.PushFrame`'s BPP16 / BPP8 branches. Worth doing if banding shows up after gamma at low brightness; not urgent. Separate hook point from 4a (operates on bytes mid-quantization, not on `Frame[]`).
+
+### Feature 6: Auto-on/off lifecycle + custom startup content — *planned*
+
+Goal: leave the wall plugged in 24/7 and have it mirror PC state automatically. PC awake (logged in, unlocked) → wall shows configurable content. PC locked, asleep, or shut down → wall blank. No manual intervention.
+
+**Architecture: events get caught at three layers**
+
+| User action | Protocol-level effect | Who reacts |
+|-------------|----------------------|------------|
+| PC shuts down | TCP closes hard, receiver fires `WStype_DISCONNECTED` | Firmware (clear LEDs in disconnect handler) |
+| PC sleeps | Networking goes down ~immediately, same disconnect path | Firmware. LMCSHD also pushes black proactively for instant response |
+| PC locks (no sleep) | TCP stays alive; receiver has no idea | LMCSHD only — `SystemEvents.SessionSwitch` → push black |
+| PC wakes / unlocks / logs in | Network alive or coming back | LMCSHD — `SessionUnlock` / `PowerModes.Resume` / app start → push custom content |
+
+Belt-and-suspenders: firmware-side blank-on-disconnect handles hard cases (LMCSHD crash, OS killing the process during sleep) where the PC-side handler couldn't run.
+
+**Substeps:**
+
+- [ ] **6.1** — Receiver firmware blanks LEDs on `WStype_DISCONNECTED`. One-line addition: `FastLED.clear(); FastLED.show();`. Reflash both receivers once. Foundation for everything else.
+- [ ] **6.2** — `PowerStateController.cs` in LMCSHD: subscribes to `Microsoft.Win32.SystemEvents.SessionSwitch` (Lock / Unlock / Logon / Logoff) and `PowerModeChanged` (Suspend / Resume). State machine `Active ↔ Idle`. On Idle → push black frame. On Active → push current content. App-start defaults to Active.
+- [ ] **6.3** — `Network → Disconnect` blanks the wall before stopping the WS server. Currently it leaves whatever frame was last sent on the panels; new behavior matches the lifecycle model.
+- [ ] **6.4** — Manual `Wall: On / Off` toggle on the main window (probably in or near the brightness/gamma strip). Pushes black or pushes content without touching the WS server. Lets the user black the wall briefly without locking the PC.
+- [ ] **6.5** — Auto-launch via Startup-folder shortcut. Window opens minimized. May need a `<Window WindowState="Minimized">` startup attribute or a `--minimized` arg.
+- [ ] **6.6** — System tray icon (`NotifyIcon` from WinForms). Shows status (server listening, N/2 receivers connected). Right-click menu mirrors the manual override and exits the app cleanly.
+- [ ] **6.7** — Custom-content modes. User picks one and configures it via a new settings dialog. Three modes for the first cut; more later.
+  - **6.7a** — *Image / GIF file* at a user-configured path. Static PNG → push once on Activate. Animated GIF → loop while Active.
+  - **6.7b** — *Screen mirror* — kicks off the existing Screen Recorder pipeline on Activate, stops on Idle.
+  - **6.7c** — *Clock display* — render current time onto the matrix. Font + layout TBD; placeholder solid blocks of color is fine until we pick a style.
+  - **6.7d** — *Settings UI*: dialog to pick mode and configure params (file path, screen region, clock format). Persisted to `display-prefs.dat` or a new `lifecycle-prefs.dat`.
+- ~~**6.8**~~ — *Hibernate handling — ABANDONED 2026-05-01.* Tried two approaches; neither blanked the wall on hibernate.
+  - *v1 (WS-protocol heartbeat):* receiver `webSocket.enableHeartbeat(5000, 2000, 2)` to detect dead connections. User waited several minutes hibernated; wall stayed lit. Suspect Windows keeps the WiFi NIC alive enough during hibernate that WS-layer pings still appear to succeed (NIC-level TCP offload, Wake-on-LAN keep-alives, etc.).
+  - *v2 (app-level watchdog + LMCSHD keepalive timer):* receiver tracked last-WS-message time, blanked + force-disconnected after 3 s silence; LMCSHD pushed a keepalive frame every 1 s. Same result on hibernate — somehow the receivers kept seeing data, or the OS kept TCP alive enough that pushes still got through. Did fix LMCSHD-crash detection as a side effect, but that wasn't the original target.
+  - Both attempts left in the source as commented-out blocks tagged `Feature 6.8 (abandoned 2026-05-01)` so they're a starting point if revisited. Code is in `LED_Wall_Reciever.ino` (top-of-file globals, `webSocketEvent` cases, `loop()`, and `setup()` heartbeat call) and `NetworkManager.cs` (timer field + Connect/Disconnect references).
+  - Current behavior on hibernate: wall stays in its last state until something else trips a disconnect (could be hours via default TCP keepalive timeout). Lock and sleep still blank correctly via 6.2; shutdown blanks via 6.1's clean-disconnect path.
+- [ ] **6.9** — *Auto-set matrix dimensions from receiver handshake reports.* Today `MatrixFrame.Width/Height` default to 16 and the `Edit → Matrix Dimensions...` dialog overrides, but the override doesn't persist — user has to re-enter dimensions every launch even though the actual wall size doesn't change.
+
+  Approach: extend the existing `"Device N"` handshake to include the receiver's panel dimensions. Firmware reply becomes `"Device N WxH"` (space-separated, e.g. `"Device 1 16x32"`), pulling W/H from the existing `#define WIDTH` / `#define HEIGHT` in the receiver sketch. LMCSHD's `OnTextMessage` parses the extra field and stores per-device panel dimensions. Once a device identifies, LMCSHD computes the total wall (default: side-by-side, so total `Width = Σ panelWidths`, `Height = max(panelHeights)`) and calls `MatrixFrame.SetDimensions(totalW, totalH)`. The existing per-dimension sections file (`sections-WxH.dat`) then auto-loads.
+
+  Forward/backward compatible: if the dims field is absent (old or stripped firmware), parser falls through and dimensions don't get auto-set — user can still use the manual dialog. If panel layout isn't side-by-side (stacked, 2x2 grid, etc.), the user-edited Sections list takes precedence over the auto-derived layout — only the total `Width/Height` get set from the reports, layout itself stays under user control.
+
+  Persistence is *not* sufficient on its own (was the prior plan) — this approach is more robust against config drift: swap a panel, reflash with a different `DEVICE_NUM`, change panel dims, and LMCSHD adapts. Persistence could be added as a complementary fallback for cold-start when no receivers are connected yet, but isn't strictly needed: the wall stays its default size until receivers come online and report.
+
+  Both repos change: receiver firmware sketch (LED_Display) for the new reply format, and `NetworkManager.OnTextMessage` + `MatrixFrame` for the parse + auto-set logic.
+
+**Decisions captured (2026-04-29):**
+
+- **Q: Should `Network → Disconnect` blank the wall?** A: Yes (substep 6.3).
+- **Q: Active state when no receivers connected yet?** A: Mark Active anyway; `PushFrame` is a no-op until receivers identify, then any pending state flushes via the existing 3.5 ack-pending mechanism. Nothing extra needed in 6.2.
+- **Q: What custom content?** A: Three modes — image/GIF file, screen mirror, clock — user-configurable. More modes can be added later.
+- **Q: Lock = blank, or only sleep/shutdown?** A: Lock + sleep + shutdown all blank for now. Customizability (per-event behavior) is a deliberate follow-up for after 6.7 ships.
+- **Q: Auto-launch minimized?** A: Yes (substep 6.5).
+- **Q: Tray icon?** A: Yes (substep 6.6).
+- **Q: Manual wall on/off override?** A: Yes (substep 6.4).
+
+**Added 2026-04-30 (after 6.6 shipped):**
+
+- *Wall must blank on hibernate too.* See substep 6.8 — abandoned 2026-05-01 after two failed attempts.
+- *LMCSHD should auto-set the matrix dimensions on launch instead of requiring the user to re-enter them every time.* See substep 6.9. Initial plan was to persist dimensions; revised to have receivers report panel dimensions in the handshake — more robust against config drift, single source of truth (the firmware compile-time constants).
+
+**Future Feature 6 follow-ups (not in initial scope):**
+
+- Per-event blank behavior settings (e.g. "lock doesn't blank, sleep does"). User explicitly deferred this — current default is "all three events blank."
+- More content modes (slideshow, audio-reactive, weather, custom shader-style animations).
+- "Resume from last frame" mode that snapshots `Frame[]` on Idle and restores on Activate, in addition to the configured content mode.
+- Tray-icon affordances beyond status (e.g. live preview, brightness slider).
+
+### Feature 7: OTA receiver firmware updates — *planned*
+
+Goal: stop unplugging receivers from the LEDs every time the firmware needs updating. Push new sketches over WiFi via the Arduino IDE's network-port mechanism instead. Pure firmware-side feature — no LMCSHD changes.
+
+**How it works:** receiver firmware adds `ArduinoOTA.begin()` in setup and `ArduinoOTA.handle()` in the main loop. The board advertises itself via mDNS (`led-receiver-1.local` / `led-receiver-2.local`) and shows up under Arduino IDE's `Tools → Port → Network ports`. Selecting it and clicking Upload pushes the compiled `.bin` over UDP/8266; the bootloader writes the new firmware to the staging partition, swaps, and reboots. Built into the ESP8266 Arduino core — no external dependencies.
+
+**Substeps:**
+
+- [ ] **7.1** — Firmware: `#include <ArduinoOTA.h>`, set hostname per-board (`led-receiver-<DEVICE_NUM>`), set password from `secrets.h`, call `begin()` in `setup()` after WiFi connect, call `handle()` in `loop()` before `webSocket.loop()`. The `handle()` call is cheap when no OTA is in progress.
+- [ ] **7.2** — Update `secrets.example.h` template to include `#define OTA_PASSWORD "your_ota_password"`. User updates their gitignored `secrets.h` accordingly.
+- [ ] **7.3** — One-time USB reflash of both receivers with the OTA-capable firmware. After this, OTA is the deployment path.
+- [ ] **7.4** — Verify OTA: edit a no-op (e.g. tweak a Serial.println), click Upload with the network port selected, watch receiver reboot and reconnect.
+
+**Decisions / defaults:**
+
+- *Authentication.* Password-protected. Without one, anyone on the LAN could push firmware. Password lives in gitignored `secrets.h`, same pattern as WiFi creds.
+- *Hostname format.* `led-receiver-<DEVICE_NUM>` — derives from existing `#define DEVICE_NUM`, so each board's hostname is automatically unique. Keeps `secrets.h` symmetric across boards.
+- *Discovery.* Arduino IDE auto-discovers via mDNS, which on Windows requires Bonjour for Windows installed once. Workaround if Bonjour isn't present: type `<receiver-ip>:8266` manually into the IDE's port field.
+- *No LMCSHD-side OTA UI.* Arduino IDE handles the upload mechanics; no value in re-implementing `espota.py` in C# for this hobby project.
+
+**Constraints worth knowing:**
+
+- *Flash size budget.* OTA stages the new image in the second half of flash before swapping. Current sketch (~few hundred KB) fits comfortably in the ~1 MB usable. Grow with care if the firmware ever bloats.
+- *Mid-flash unresponsiveness.* During the ~5–10 s of OTA write + reboot, the receiver doesn't process WS frames. Wall stays on whatever it last had, briefly disconnects, then reconnects on the new firmware. Easiest to flash with `Wall: Off` toggled via the tray menu.
+- *Bricking risk.* Low — bootloader rolls back on CRC failure. A genuinely broken sketch (e.g. infinite loop in `setup()` before `ArduinoOTA.begin()`) could brick a board and require USB recovery, but this requires actual code error, not just a network glitch.
 
 ### Feature 3: Direct WebSocket from PC — *done*
 
@@ -205,9 +298,18 @@ It covers: hardware, architecture, protocol, what's been built (with code
 pointers), what's left, build instructions, test loop, and known scaffolding.
 
 Quick status:
-- All planned features are done. Features 1, 2, 3, 4a, 5 verified on the
-  actual wall. Source ESP retired to legacy/; LMCSHD is now the WebSocket
-  server and receivers connect directly.
+- Features 1, 2, 3, 4a, 5 are done and verified on the actual wall.
+  Source ESP is retired to legacy/; LMCSHD is the WebSocket server and
+  receivers connect directly.
+- Feature 6 (auto-on/off lifecycle + custom startup content) is in
+  progress. 6.1–6.6 + 6.9 are done. 6.8 (hibernate handling) was
+  abandoned after two failed attempts — wall stays in its last state
+  on hibernate; lock/sleep/shutdown still blank correctly. 6.7
+  (configurable content modes — image/GIF, screen mirror, clock) is
+  the only remaining piece for Feature 6.
+- Feature 7 (OTA receiver firmware updates) is planned for after 6.7.
+  Pure firmware-side change so future receiver updates don't need a
+  USB reflash.
 - Feature 4b (dithering) is deferred — only do it if banding shows up
   after gamma at low brightness.
 - Open follow-ups noted in PROJECT.md: receiver firmware MAX_BRIGHTNESS
@@ -238,11 +340,15 @@ Non-obvious gotchas you must know up front:
 
 What I want to do now:
 
-[REPLACE THIS WITH THE TASK FOR THIS SESSION before pasting. The original
-roadmap (Features 1, 2, 3, 4a, 5) is done. Likely follow-ups: removing the
-firmware MAX_BRIGHTNESS=200 cap now that LMCSHD has software brightness;
-cleaning up MatrixFrame.UseTestSectionsOn32x32 scaffolding once persistence
-has been used; persisting global orientation / color mode / COM port;
-csproj migration to SDK-style. Or Feature 4b (dithering) if banding shows
-up at low brightness.]
+Continue Feature 6 (auto-on/off lifecycle + custom startup content). Read
+PROJECT.md's Feature 6 section for the full plan including the recorded
+design decisions. Pick up at the next unchecked substep (6.1 first time
+through). Don't re-litigate the design decisions already captured —
+proceed unless something has changed.
+
+[Or replace with another task. Other follow-ups noted in PROJECT.md:
+Feature 4b dithering, removing the firmware MAX_BRIGHTNESS=200 cap now
+that LMCSHD has software brightness, MatrixFrame.UseTestSectionsOn32x32
+scaffolding cleanup, persisting global orientation/color mode/COM port,
+csproj migration to SDK-style.]
 ```

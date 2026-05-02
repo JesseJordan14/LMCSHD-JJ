@@ -15,11 +15,28 @@ namespace LMCSHD
         private static WriteableBitmap MatrixBitmap { get; set; }
         private static WriteableBitmap MatrixBitmap_Borders { get; set; }
 
+        // Feature 6.6 state.
+        private TrayController _trayController;
+        // Set true when the tray's Exit menu item is invoked, then we Close().
+        // The Window_Closing handler checks this to decide between
+        // minimize-to-tray (false) and real cleanup-and-shut-down (true).
+        private bool _exitingFromTray = false;
+
         #region Window
         public MainWindow()
         {
             DataContext = this;
             InitializeComponent();
+
+            // Feature 6.5: when launched via the Windows startup-folder shortcut,
+            // open minimized so it doesn't steal focus / pop a window in the
+            // user's face on every login. Any other launch (manual, dev) opens
+            // normally. Setting WindowState in the ctor before the window has
+            // shown lands in the minimized state directly, no flash.
+            foreach (var arg in Environment.GetCommandLineArgs())
+            {
+                if (arg == "--minimized") { WindowState = WindowState.Minimized; break; }
+            }
             // InitializeComponent fired the sliders' default ValueChanged, clobbering MatrixFrame
             // back to 1.0/1.0. Load prefs now and re-sync the slider UI to the loaded values;
             // the resulting ValueChanged just writes the same value back into MatrixFrame.
@@ -39,14 +56,65 @@ namespace LMCSHD
             // Auto-start the WebSocket server on launch so receivers can dial in
             // immediately. User can stop/restart via Network → Disconnect / Connect...
             NetworkManager.Connect(NetworkManager.DefaultPort);
+
+            // Drive the wall on/off lifecycle from Windows session/power events
+            // (Feature 6.2). Started here, after NetworkManager so SetActive
+            // calls have a server to gate against; stopped in Window_Closing.
+            PowerStateController.Start();
+
+            // Sync the manual Wall On/Off button to lifecycle state changes
+            // (Feature 6.4). Initial label matches NetworkManager's default
+            // (true). Subsequent flips from PowerStateController or from this
+            // button itself fire ActiveStateChanged.
+            NetworkManager.ActiveStateChanged += OnNetworkActiveStateChanged;
+            UpdateWallToggleLabel(NetworkManager.IsActive);
+
+            // Feature 6.6: tray icon. Created last so all the managers it
+            // subscribes to are already up. RequestExit() handles real
+            // shutdown when the tray's Exit menu is clicked.
+            _trayController = new TrayController(this, RequestExit);
+
+            // If we launched minimized via the startup shortcut, sync the
+            // taskbar visibility now (Window_StateChanged will only fire on
+            // future state transitions, not on the initial state).
+            if (WindowState == WindowState.Minimized) ShowInTaskbar = false;
         }
         private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e)
         {
+            // Feature 6.6: clicking the X button minimizes to tray instead of
+            // exiting. The app is meant to run 24/7 to drive the wall on/off
+            // lifecycle. The tray menu's "Exit" item is the explicit exit path
+            // — it sets _exitingFromTray and re-triggers Close().
+            if (!_exitingFromTray)
+            {
+                e.Cancel = true;
+                WindowState = WindowState.Minimized;
+                return;
+            }
+
             MatrixFrame.SaveDisplayPrefs();
             EndAllThreads();
             SerialManager.Disconnect();
             while (SerialManager.IsConnected()) SerialManager.Disconnect();
+            PowerStateController.Stop();
+            _trayController?.Dispose();
+            // NetworkManager.Disconnect closes connections cleanly, which fires
+            // the firmware-side blank-on-disconnect (Feature 6.1) — no need to
+            // explicitly push black here for shutdown.
             NetworkManager.Disconnect();
+        }
+
+        private void Window_StateChanged(object sender, EventArgs e)
+        {
+            // Tray-only when minimized (no taskbar entry). Restoring puts it
+            // back. Tray icon stays visible regardless.
+            ShowInTaskbar = (WindowState != WindowState.Minimized);
+        }
+
+        public void RequestExit()
+        {
+            _exitingFromTray = true;
+            Close();
         }
 
         private void BrightnessSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -66,6 +134,20 @@ namespace LMCSHD
         private void GammaReset_Click(object sender, RoutedEventArgs e)
         {
             GammaSlider.Value = MatrixFrame.GammaDefault;
+        }
+        private void WallToggleBtn_Click(object sender, RoutedEventArgs e)
+        {
+            NetworkManager.SetActive(!NetworkManager.IsActive);
+        }
+        private void OnNetworkActiveStateChanged(bool isActive)
+        {
+            // Fired from PowerStateController on lock/unlock/sleep/wake or from
+            // our own SetActive call above — possibly off the UI thread.
+            Dispatcher.Invoke(() => UpdateWallToggleLabel(isActive));
+        }
+        private void UpdateWallToggleLabel(bool isActive)
+        {
+            WallToggleBtn.Content = isActive ? "Wall: On" : "Wall: Off";
         }
 
         private void OnFrameChanged()
